@@ -150,6 +150,56 @@ def register_solver(task_id: str):
 # Solved: 2025-12-27
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
+# SOLVED TASK: 017c7c7b
+# Pattern: Extend periodic pattern to 9 rows, recolor
+# ITT: Period detection + σ-continuation
+# Solved: 2025-12-27
+# -----------------------------------------------------------------------------
+@register_solver("017c7c7b")
+def solve_017c7c7b(task: Dict) -> List[List[List[int]]]:
+    """
+    Task: 017c7c7b
+    
+    Pattern:
+      - Find smallest period in input rows
+      - Extend to 9 rows using that period
+      - Change color 1 → 2
+    
+    ITT Analysis:
+      - σ (residue) carries the pattern forward
+      - Period detection = finding the minimal generating set
+      - Color change = boundary marking (Φ → Φ')
+    """
+    def find_period(arr):
+        n = len(arr)
+        for p in range(1, n+1):
+            is_period = True
+            for i in range(p, n):
+                if not np.array_equal(arr[i], arr[i % p]):
+                    is_period = False
+                    break
+            if is_period:
+                return p
+        return n
+    
+    predictions = []
+    for test in task['test']:
+        inp = np.array(test['input'])
+        h, w = inp.shape
+        
+        period = find_period(inp)
+        out_h = 9
+        
+        result = np.zeros((out_h, w), dtype=int)
+        for r in range(out_h):
+            row = inp[r % period].copy()
+            row = np.where(row == 1, 2, row)
+            result[r] = row
+        
+        predictions.append(result.tolist())
+    return predictions
+
+# -----------------------------------------------------------------------------
 # SOLVED TASK: 00dbd492
 # Pattern: Fill rectangles based on size
 # ITT: Rectangle size → fill color mapping
