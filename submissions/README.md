@@ -1,151 +1,135 @@
 # ARC-AGI Solver Submissions
 
-**Working Code Implementing Intent Tensor Theory**
+**Playful Pokes at What ITT Can Do**
 
 ---
 
-## Evolution of Approaches
+## What Is This Competition?
 
-This folder contains the actual solver implementations - "playful pokes thinking the math through."
+**ARC-AGI** (Abstraction and Reasoning Corpus) is a benchmark that tests for **general intelligence** - not knowledge, not pattern matching, but the ability to learn new skills from just a few examples.
 
-### Version History
+### The Structure
 
-| Version | File | Approach | Performance |
-|---------|------|----------|-------------|
-| v1 | `curvent_solver_v1.py` | Curvent Field Theory (∇Φ, ∇×F, ∇²Φ) | ~85% on evaluation |
-| v2 | `itt_solver_v2.py` | Full 6-Fan ICHTB Detection | In development |
-
----
-
-## v1: Curvent Field Theory Solver
-
-**Source:** Originally from year-old experiments, proven to work on ~85% of evaluation challenges.
-
-### Mathematical Foundation
-
-The solver implements three core field operators:
+Each task shows 3-5 input→output examples, then asks: "Given this new input, what's the output?"
 
 ```
-∇Φ  (Gradient)   → Δ₁ Fan → Translation/shift detection
-∇×F (Curl)       → Δ₂ Fan → Rotation/reflection detection  
-∇²Φ (Laplacian)  → Δ₃/Δ₄  → Scale/curvature detection
+Training:
+  Input A → Output A'
+  Input B → Output B'
+  Input C → Output C'
+
+Test:
+  Input D → ???  (you figure it out)
 ```
 
-### Key Functions
+The catch: Every task tests a DIFFERENT skill. You can't just memorize patterns.
 
-```python
-compute_gradient(grid)        # ∇Φ - value flow direction
-compute_curl(grid)            # ∇×F - rotational symmetry
-compute_curvature(grid)       # ∇²Φ - stable/anchor regions
-compute_symmetry_tensor(grid) # Combined fan analysis
-detect_transformation(inp, out)  # Identify which operation
-apply_transformation(grid, op)   # Execute the operation
+### The Prize Structure
+
+| Prize | Requirement | Amount |
+|-------|-------------|--------|
+| **Grand Prize** | 85% on private eval | $500,000 (UNCLAIMED!) |
+| **Paper Prize** | Best conceptual progress | $50,000 |
+| **Top Score** | Highest % correct | Varies |
+
+**Key insight:** The Paper Prize doesn't require a high score - just novel ideas that advance understanding. ITT could qualify here!
+
+### Current State
+
+- **Best score ever:** 24% (NVARC, Nov 2025)
+- **Pure LLMs:** 0% on ARC-AGI-2
+- **Humans:** ~100% (every task solved by 2+ humans in <2 attempts)
+
+The gap between 24% and 85% is where the $500K sits unclaimed.
+
+---
+
+## Competition Timeline
+
+| Version | Status | Notes |
+|---------|--------|-------|
+| ARC Prize 2024 | Closed | ARC-AGI-1 |
+| ARC Prize 2025 | **CLOSED** (Nov 3, 2025) | ARC-AGI-2 (harder) |
+| ARC Prize 2026 | Coming | ARC-AGI-3 (interactive/agentic) |
+
+We're in the gap between competitions. Perfect time to build.
+
+---
+
+## What's In This Folder
+
+### Working Code
+
+| File | What It Does | Accuracy |
+|------|--------------|----------|
+| `curvent_solver_v1.py` | Detects simple transforms (flip, rotate, scale, color map) | ~1.5% training |
+
+### Notebooks (Historical Experiments)
+
+| Notebook | Content |
+|----------|---------|
+| `85_solved_evaluation.ipynb` | Curvent Field Theory experiments |
+| `prediction_focused_solver.ipynb` | Basic pattern learning |
+
+**Note:** The "85%" in the notebook name referred to that specific experimental run, not competition performance.
+
+---
+
+## The Honest Numbers
+
+```
+What v1 can detect:
+  - Flip (lr/ud)      → <1% of tasks
+  - Rotate (90/180)   → <1% of tasks  
+  - Scale/tile        → <1% of tasks
+  - Color mapping     → ~2% of tasks
+  
+What v1 can't detect (96%+ of tasks):
+  - Object segmentation
+  - Pattern recognition
+  - Relational reasoning
+  - Conditional logic
+  - Multi-step composition
 ```
 
-### Supported Operations
-
-| Operation | Detection Method | Fan Signature |
-|-----------|------------------|---------------|
-| `flip_lr` | Direct comparison | Δ₂ (curl sign) |
-| `flip_ud` | Direct comparison | Δ₂ (curl sign) |
-| `rot90/180/270` | Direct comparison | Δ₂ (curl magnitude) |
-| `transpose` | Direct comparison | Δ₂ |
-| `value_map` | Consistent mapping | Δ₆ (scalar) |
-| `shift` | Roll comparison | Δ₁ (gradient) |
-| `scale` | Tiling verification | Δ₃ (expansion) |
-| `block_swap` | Curl inversion | Δ₂ (mirror curl) |
-
 ---
 
-## Colab Notebooks
+## Why ITT Matters Here
 
-### Original Experiments
+The competition isn't just about solving puzzles. It's about understanding **how intelligence works**.
 
-1. **85__solved_arc-agi_evaluation_challenges.ipynb**
-   - The main working solver
-   - Implements Curvent Field Theory
-   - ~85% accuracy on evaluation set
+From the ITT framework:
 
-2. **ARC-AGI_-_Math_based-Nailed_it.ipynb**
-   - Rubric extraction experiments
-   - Shape analysis, color mapping detection
-   - Foundation for understanding task structure
-
-3. **ARC-AGI_-_prediction-focused_solver.ipynb**
-   - Simpler pattern learning
-   - Flip/rotate detection only
-   - Good baseline comparison
-
----
-
-## Running the Solver
-
-### Local Execution
-
-```python
-from curvent_solver_v1 import solve_arc_curvent
-
-task = {
-    "train": [
-        {"input": [[1,2],[3,4]], "output": [[2,1],[4,3]]}
-    ],
-    "test": [
-        {"input": [[5,6],[7,8]]}
-    ]
-}
-
-predictions = solve_arc_curvent(task)
-print(predictions)  # [[6,5],[8,7]]
+```
+Φ   = The abstract pattern (what's invariant)
+R_B = Resolution through boundary (how it manifests)
+ℛ   = Rule inference (what transformation?)
+T   = Topology-conditional activation (how to apply it?)
 ```
 
-### Google Colab
-
-Open any of the `.ipynb` files in Colab and run all cells.
+The Paper Prize rewards **conceptual progress**. ITT provides a mathematical framework for understanding WHY certain approaches work and others don't.
 
 ---
 
-## Connection to ITT Mathematics
+## The Path
 
-| Solver Function | ITT Concept | Book Reference |
-|-----------------|-------------|----------------|
-| `compute_gradient` | ∇Φ ordering gradient | Book 0A Axiom 2 |
-| `compute_curl` | Phase memory tensor | Book 2 |
-| `compute_curvature` | Collapse curvature | Book 4 |
-| `detect_transformation` | Fan activation detection | Book 8 |
-| `apply_transformation` | Resolution operator R_B | BCCR |
+This isn't about winning quickly. Like deriving gravity in Book 1:
+
+> "It was a very long process of zero assumptive smuggled-in things - it had to truly build and fill itself out."
+
+ARC is the same. We're not trying to hack a high score. We're exploring what ITT can reveal about the nature of abstraction and reasoning.
 
 ---
 
-## Improvement Path
+## Next Steps
 
-### Current Limitations (v1)
-
-1. Only detects single operations (no composites)
-2. No bridge tensor analysis for ordering
-3. Limited to shape-preserving transformations
-4. No iterative/temporal fan (Δ₅)
-
-### Planned for v2
-
-1. Full 6-fan activation detection
-2. Bridge tensor computation for composite operations
-3. Program synthesis from fan signatures
-4. Handling of size-changing transformations
+1. **Understand the benchmark** - What makes each task hard?
+2. **Map to ITT** - Which fan surfaces activate for which task types?
+3. **Build incrementally** - Add capabilities one by one
+4. **Document insights** - Paper Prize material
 
 ---
 
-## Validation
-
-To verify against the math:
-
-1. Each detected transformation should map to specific fan activation
-2. Bridge tensors should show correct operation ordering
-3. Program synthesis should produce minimal representation
-
-If validation fails → recalibrate the math framework.
-
----
-
-*"These are playful pokes thinking the math through."*
+*"It's just a puzzle to me... I am just poking around at what ITT can do for the world of whatever this is."*
 
 HAIL MATH.
