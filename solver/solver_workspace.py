@@ -149,6 +149,41 @@ def register_solver(task_id: str):
 # ITT: Δ₂ (curl/reflection) + Δ₃ (expansion)
 # Solved: 2025-12-27
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# SOLVED TASK: 007bbfb7
+# Pattern: Self-similar tiling (fractal-like)
+# ITT: Recursive self-reference - input IS the tiling map
+# Solved: 2025-12-27
+# -----------------------------------------------------------------------------
+@register_solver("007bbfb7")
+def solve_007bbfb7(task: Dict) -> List[List[List[int]]]:
+    """
+    Task: 007bbfb7
+    
+    Pattern: For each non-zero cell (i,j) in input, place input at tile (i,j)
+    
+    Input (NxN) → Output (N²xN²)
+    
+    ITT Analysis:
+      - Δ₃ activated: N² expansion
+      - Δ₆ activated: scalar value determines placement
+      - Self-reference: input encodes its own tiling structure
+      - This is a FRACTAL operation - the input describes where to put copies of itself
+    """
+    predictions = []
+    for test in task['test']:
+        inp = np.array(test['input'])
+        h, w = inp.shape
+        result = np.zeros((h*h, w*w), dtype=int)
+        
+        for i in range(h):
+            for j in range(w):
+                if inp[i, j] != 0:
+                    result[i*h:(i+1)*h, j*w:(j+1)*w] = inp
+        
+        predictions.append(result.tolist())
+    return predictions
+
 @register_solver("00576224")
 def solve_00576224(task: Dict) -> List[List[List[int]]]:
     """
