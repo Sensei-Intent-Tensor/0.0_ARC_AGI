@@ -150,6 +150,65 @@ def register_solver(task_id: str):
 # Solved: 2025-12-27
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
+# SOLVED TASK: 00dbd492
+# Pattern: Fill rectangles based on size
+# ITT: Rectangle size → fill color mapping
+# Solved: 2025-12-27
+# -----------------------------------------------------------------------------
+SIZE_TO_COLOR_00dbd492 = {5: 8, 7: 4, 9: 3}
+
+@register_solver("00dbd492")
+def solve_00dbd492(task: Dict) -> List[List[List[int]]]:
+    """
+    Task: 00dbd492
+    
+    Pattern:
+      - Find rectangles made of color 2
+      - Fill interior with color based on rectangle size
+      - 5x5 → 8, 7x7 → 4, 9x9 → 3
+    
+    ITT Analysis:
+      - Δ₄ (compression): size encodes color
+      - Boundary detection + interior fill
+    """
+    from scipy.ndimage import label
+    
+    predictions = []
+    for test in task['test']:
+        inp = np.array(test['input'])
+        result = inp.copy()
+        
+        # Find rectangles
+        boundary = (inp == 2).astype(int)
+        labeled, num = label(boundary, structure=np.ones((3,3)))
+        
+        for comp in range(1, num+1):
+            mask = labeled == comp
+            if np.sum(mask) < 8:
+                continue
+            rows = np.where(np.any(mask, axis=1))[0]
+            cols = np.where(np.any(mask, axis=0))[0]
+            if len(rows) < 3 or len(cols) < 3:
+                continue
+            
+            r0, r1 = rows[0], rows[-1]
+            c0, c1 = cols[0], cols[-1]
+            h = r1 - r0 + 1
+            w = c1 - c0 + 1
+            
+            if h >= 5 and w >= 5:
+                size = max(h, w)
+                fill_color = SIZE_TO_COLOR_00dbd492.get(size, 0)
+                
+                for r in range(r0+1, r1):
+                    for c in range(c0+1, c1):
+                        if inp[r, c] == 0:
+                            result[r, c] = fill_color
+        
+        predictions.append(result.tolist())
+    return predictions
+
+# -----------------------------------------------------------------------------
 # SOLVED TASK: 00d62c1b
 # Pattern: Fill enclosed regions
 # ITT: Boundary detection + interior flood fill
