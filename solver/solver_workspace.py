@@ -150,6 +150,62 @@ def register_solver(task_id: str):
 # Solved: 2025-12-27
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
+# SOLVED TASK: 00d62c1b
+# Pattern: Fill enclosed regions
+# ITT: Boundary detection + interior flood fill
+# Solved: 2025-12-27
+# -----------------------------------------------------------------------------
+@register_solver("00d62c1b")
+def solve_00d62c1b(task: Dict) -> List[List[List[int]]]:
+    """
+    Task: 00d62c1b
+    
+    Pattern:
+      - Color 3 forms boundaries
+      - Empty regions (0) that don't touch grid edge get filled with color 4
+      - Connected components analysis
+    
+    ITT Analysis:
+      - Boundary detection: ρ_q at termination surfaces
+      - Δ₄ (compression): interior space is marked/claimed
+      - Topological: "inside" vs "outside" classification
+    """
+    from scipy.ndimage import label
+    
+    predictions = []
+    for test in task['test']:
+        inp = np.array(test['input'])
+        result = inp.copy()
+        
+        # Find connected components of 0s
+        zeros = (inp == 0).astype(int)
+        labeled, _ = label(zeros)
+        
+        # Find labels that touch the border
+        h, w = inp.shape
+        border_labels = set()
+        
+        for j in range(w):
+            if labeled[0, j] > 0:
+                border_labels.add(labeled[0, j])
+            if labeled[h-1, j] > 0:
+                border_labels.add(labeled[h-1, j])
+        for i in range(h):
+            if labeled[i, 0] > 0:
+                border_labels.add(labeled[i, 0])
+            if labeled[i, w-1] > 0:
+                border_labels.add(labeled[i, w-1])
+        
+        # Fill interior regions
+        for i in range(h):
+            for j in range(w):
+                if labeled[i, j] > 0 and labeled[i, j] not in border_labels:
+                    result[i, j] = 4
+        
+        predictions.append(result.tolist())
+    return predictions
+
+# -----------------------------------------------------------------------------
 # SOLVED TASK: 009d5c81
 # Pattern: Shape-to-color indicator mapping
 # ITT: Small shape ENCODES the target color (glyph → scalar)
