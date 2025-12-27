@@ -150,6 +150,58 @@ def register_solver(task_id: str):
 # Solved: 2025-12-27
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
+# SOLVED TASK: 009d5c81
+# Pattern: Shape-to-color indicator mapping
+# ITT: Small shape ENCODES the target color (glyph → scalar)
+# Solved: 2025-12-27
+# -----------------------------------------------------------------------------
+# Shape templates for color lookup
+SHAPE_009d5c81 = {
+    ((1,1,1), (1,0,1), (0,1,0)): 7,  # Down arrow
+    ((1,0,1), (0,1,0), (1,1,1)): 3,  # Up arrow
+    ((0,1,0), (1,1,1), (0,1,0)): 2,  # Plus sign
+}
+
+@register_solver("009d5c81")
+def solve_009d5c81(task: Dict) -> List[List[List[int]]]:
+    """
+    Task: 009d5c81
+    
+    Pattern:
+      - Color 1 = indicator (small shape that encodes target color)
+      - Color 8 = main shape (gets recolored)
+      - Indicator shape maps to output color
+      - Remove indicator, recolor main shape
+    
+    ITT Analysis:
+      - Δ₆ activated: glyph shape → scalar color mapping
+      - This is ENCODING: geometric form carries semantic value
+      - The indicator is a "key" that unlocks the color
+    """
+    predictions = []
+    for test in task['test']:
+        inp = np.array(test['input'])
+        
+        # Extract indicator shape
+        mask = inp == 1
+        rows = np.any(mask, axis=1)
+        cols = np.any(mask, axis=0)
+        r_min, r_max = np.where(rows)[0][[0, -1]]
+        c_min, c_max = np.where(cols)[0][[0, -1]]
+        region = inp[r_min:r_max+1, c_min:c_max+1]
+        shape = tuple(tuple((region == 1).astype(int)[i]) for i in range(region.shape[0]))
+        
+        # Map to color
+        output_color = SHAPE_009d5c81.get(shape, 0)
+        
+        # Create output
+        result = np.zeros_like(inp)
+        result[inp == 8] = output_color
+        
+        predictions.append(result.tolist())
+    return predictions
+
+# -----------------------------------------------------------------------------
 # SOLVED TASK: 007bbfb7
 # Pattern: Self-similar tiling (fractal-like)
 # ITT: Recursive self-reference - input IS the tiling map
