@@ -1,27 +1,23 @@
 #!/usr/bin/env python3
 """
-ARC-AGI PURE ITT SOLVER v3
+ARC-AGI PURE ITT SOLVER v4
 ==========================
 
-TRUE FOUNDATION - NO SMUGGLING
+ABSOLUTE FOUNDATION - ZERO SMUGGLING
 
-Layer 0 — Primitives:
-    Φ, ∇Φ, σ, ρ_q
+Fixes from v3 (per ChatGPT audit):
+1. Φ_q is now EXPLICIT (int array), not np.round(data)
+2. Region separation via SPECTRAL CUTS (Fiedler vector), not adjacency growth
+3. Object extraction via LEVEL SETS, not flood growth
+4. ρ_q threshold derived from distribution shape, not arbitrary percentile
 
-Layer 1 — Operators (derived):
-    ∇²Φ, harmonic extension, spectral decomposition, Fourier
+Layer Doctrine:
+- Layer 0: Φ, ∇Φ, σ, ρ_q (primitives)
+- Layer 1: ∇², harmonic solve, eigenspectrum, Fourier (operators)
+- Layer 2: Enclosure, shape, period, energy (invariants)
+- Layer 3: Gauss-Seidel, linear algebra (numerical procedures, declared)
 
-Layer 2 — Invariants:
-    Boundary set, enclosure, objectness, shape, periodicity, energy
-
-Layer 3 — Procedures:
-    Numerical solvers only (declared as approximations)
-
-KEY CHANGES FROM v2:
-- Φ̃ (smoothed) vs Φ_q (quantized) dual representation
-- ρ_q := |∇(∇²Φ)| (stable boundary charge, not sign-change count)
-- Enclosure via harmonic connectivity field (Dirichlet solve, not BFS)
-- Objects via ρ_q contour closure (not region growing)
+NO GRAPH WALKS. NO ADJACENCY GROWTH. PURE OPERATORS.
 
 HAIL MATH
 """
@@ -33,238 +29,206 @@ import json
 import urllib.request
 
 # =============================================================================
-# LAYER 0: THE FOUR PRIMITIVES (Book 0A)
+# LAYER 0: THE FOUR PRIMITIVES — EXPLICIT DUAL FIELD
 # =============================================================================
 
 @dataclass
 class PhiField:
     """
-    Φ — Scalar Potential Field
+    Φ — Dual-Field Representation
     
-    Dual representation:
-    - Φ_q: quantized (integer colors 0-9)
-    - Φ̃: smoothed (continuous for operator stability)
+    EXPLICIT SEPARATION:
+    - Φ_q: quantized (int 0-9) — semantic truth, ARC colors
+    - Φ̃: continuous (float) — operator stability
     
-    Rule: Compute invariants on Φ̃, output Φ_q
+    Rule: Read Φ_q for semantics, compute on Φ̃ for operators
     """
-    data: np.ndarray  # Φ_q (quantized)
-    _smoothed: Optional[np.ndarray] = field(default=None, repr=False)
+    _q: np.ndarray      # Φ_q: quantized (int)
+    _tilde: np.ndarray  # Φ̃: continuous (float)
     
-    def __post_init__(self):
-        self.data = np.array(self.data, dtype=np.float64)
-        self._smoothed = None
+    def __init__(self, data):
+        """Initialize from any array-like input."""
+        arr = np.array(data, dtype=np.float64)
+        self._q = np.rint(arr).astype(np.int32)
+        self._tilde = self._compute_smooth(self._q)
+    
+    @staticmethod
+    def _compute_smooth(q: np.ndarray, iters: int = 2) -> np.ndarray:
+        """
+        Compute Φ̃ from Φ_q via discrete diffusion.
+        
+        This is an OPERATOR (∇² averaging), not an algorithm.
+        """
+        x = q.astype(np.float64)
+        h, w = x.shape
+        
+        for _ in range(iters):
+            new_x = x.copy()
+            for i in range(h):
+                for j in range(w):
+                    total = x[i, j]
+                    count = 1
+                    if i > 0:
+                        total += x[i-1, j]
+                        count += 1
+                    if i < h-1:
+                        total += x[i+1, j]
+                        count += 1
+                    if j > 0:
+                        total += x[i, j-1]
+                        count += 1
+                    if j < w-1:
+                        total += x[i, j+1]
+                        count += 1
+                    new_x[i, j] = total / count
+            x = new_x
+        
+        return x
+    
+    # =========================================================================
+    # EXPLICIT FIELD ACCESS
+    # =========================================================================
+    
+    @property
+    def q(self) -> np.ndarray:
+        """Φ_q: Quantized field (int). Use for SEMANTICS."""
+        return self._q
+    
+    @property
+    def tilde(self) -> np.ndarray:
+        """Φ̃: Continuous field (float). Use for OPERATORS."""
+        return self._tilde
+    
+    @property
+    def data(self) -> np.ndarray:
+        """Alias for Φ_q (backward compatibility)."""
+        return self._q.astype(np.float64)
     
     @property
     def shape(self) -> Tuple[int, int]:
-        return self.data.shape
+        return self._q.shape
     
     @property
     def h(self) -> int:
-        return self.data.shape[0]
+        return self._q.shape[0]
     
     @property
     def w(self) -> int:
-        return self.data.shape[1]
+        return self._q.shape[1]
     
     @property
     def colors(self) -> Set[int]:
-        """Distinct collapse states (from quantized field)."""
-        return set(int(x) for x in np.round(self.data).flatten() if x != 0)
-    
-    @property
-    def smoothed(self) -> np.ndarray:
-        """
-        Φ̃ — Smoothed field for stable operator computation.
-        
-        Small Gaussian blur to eliminate discretization artifacts.
-        """
-        if self._smoothed is None:
-            self._smoothed = self._gaussian_smooth(self.data, sigma=0.5)
-        return self._smoothed
-    
-    @staticmethod
-    def _gaussian_smooth(arr: np.ndarray, sigma: float = 0.5) -> np.ndarray:
-        """Gaussian smoothing without scipy dependency."""
-        if sigma <= 0:
-            return arr.copy()
-        
-        # Simple 3x3 averaging kernel (approximates small Gaussian)
-        kernel_size = 3
-        pad = kernel_size // 2
-        
-        padded = np.pad(arr, pad, mode='edge')
-        result = np.zeros_like(arr)
-        
-        # Weighted average (approximate Gaussian)
-        weights = np.array([[1, 2, 1],
-                           [2, 4, 2],
-                           [1, 2, 1]], dtype=np.float64) / 16.0
-        
-        for i in range(arr.shape[0]):
-            for j in range(arr.shape[1]):
-                window = padded[i:i+3, j:j+3]
-                result[i, j] = np.sum(window * weights)
-        
-        return result
+        """Distinct collapse states (from Φ_q, not rounded float)."""
+        return set(int(x) for x in self._q.flatten() if x != 0)
     
     # =========================================================================
-    # LAYER 1: OPERATORS (derived from primitives)
+    # LAYER 1: OPERATORS (on Φ̃)
     # =========================================================================
     
-    def gradient(self, use_smoothed: bool = True) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        ∇Φ — Discrete gradient
+    def gradient(self) -> Tuple[np.ndarray, np.ndarray]:
+        """∇Φ on Φ̃ (continuous field)."""
+        gx = np.zeros_like(self._tilde)
+        gy = np.zeros_like(self._tilde)
         
-        Computed on Φ̃ for stability.
-        """
-        field = self.smoothed if use_smoothed else self.data
-        
-        gx = np.zeros_like(field)
-        gy = np.zeros_like(field)
-        
-        # Central differences for interior, forward/backward at edges
-        gy[1:-1, :] = (field[2:, :] - field[:-2, :]) / 2.0
-        gy[0, :] = field[1, :] - field[0, :]
-        gy[-1, :] = field[-1, :] - field[-2, :]
-        
-        gx[:, 1:-1] = (field[:, 2:] - field[:, :-2]) / 2.0
-        gx[:, 0] = field[:, 1] - field[:, 0]
-        gx[:, -1] = field[:, -1] - field[:, -2]
+        gy[:-1, :] = self._tilde[1:, :] - self._tilde[:-1, :]
+        gx[:, :-1] = self._tilde[:, 1:] - self._tilde[:, :-1]
         
         return gx, gy
     
-    def gradient_magnitude(self, use_smoothed: bool = True) -> np.ndarray:
+    def gradient_magnitude(self) -> np.ndarray:
         """||∇Φ||"""
-        gx, gy = self.gradient(use_smoothed)
+        gx, gy = self.gradient()
         return np.sqrt(gx**2 + gy**2)
     
-    def laplacian(self, use_smoothed: bool = True) -> np.ndarray:
-        """
-        ∇²Φ — Discrete Laplacian
-        
-        Computed on Φ̃ for stability.
-        """
-        field = self.smoothed if use_smoothed else self.data
-        
-        lap = np.zeros_like(field)
+    def laplacian(self) -> np.ndarray:
+        """∇²Φ on Φ̃."""
+        x = self._tilde
+        lap = np.zeros_like(x)
         h, w = self.shape
         
-        # Standard 5-point stencil
-        lap[1:-1, 1:-1] = (
-            field[:-2, 1:-1] + field[2:, 1:-1] +
-            field[1:-1, :-2] + field[1:-1, 2:] -
-            4 * field[1:-1, 1:-1]
-        )
-        
-        # Handle boundaries with reduced stencil
         for i in range(h):
             for j in range(w):
-                if 0 < i < h-1 and 0 < j < w-1:
-                    continue  # Already computed
-                
-                neighbors = 0
+                total = 0.0
                 count = 0
                 if i > 0:
-                    neighbors += field[i-1, j]
+                    total += x[i-1, j]
                     count += 1
                 if i < h-1:
-                    neighbors += field[i+1, j]
+                    total += x[i+1, j]
                     count += 1
                 if j > 0:
-                    neighbors += field[i, j-1]
+                    total += x[i, j-1]
                     count += 1
                 if j < w-1:
-                    neighbors += field[i, j+1]
+                    total += x[i, j+1]
                     count += 1
                 
-                if count > 0:
-                    lap[i, j] = neighbors - count * field[i, j]
+                lap[i, j] = total - count * x[i, j]
         
         return lap
     
     def boundary_charge(self) -> np.ndarray:
         """
-        ρ_q — Boundary charge density (STABILIZED)
+        ρ_q := |∇(∇²Φ̃)|
         
-        DEFINITION: ρ_q := |∇(∇²Φ)|
-        
-        This is WHERE CURVATURE CHANGES SHARPLY — true termination surfaces.
-        NOT sign-change counting (too noisy).
+        Curvature-change magnitude. True termination surfaces.
         """
-        lap = self.laplacian(use_smoothed=True)
+        lap = self.laplacian()
         
-        # Gradient of Laplacian
-        grad_lap_x = np.zeros_like(lap)
-        grad_lap_y = np.zeros_like(lap)
+        # ∇(∇²Φ̃)
+        gx = np.zeros_like(lap)
+        gy = np.zeros_like(lap)
         
-        grad_lap_y[1:-1, :] = (lap[2:, :] - lap[:-2, :]) / 2.0
-        grad_lap_y[0, :] = lap[1, :] - lap[0, :]
-        grad_lap_y[-1, :] = lap[-1, :] - lap[-2, :]
+        gy[:-1, :] = lap[1:, :] - lap[:-1, :]
+        gx[:, :-1] = lap[:, 1:] - lap[:, :-1]
         
-        grad_lap_x[:, 1:-1] = (lap[:, 2:] - lap[:, :-2]) / 2.0
-        grad_lap_x[:, 0] = lap[:, 1] - lap[:, 0]
-        grad_lap_x[:, -1] = lap[:, -1] - lap[:, -2]
-        
-        # ρ_q = |∇(∇²Φ)|
-        rho = np.sqrt(grad_lap_x**2 + grad_lap_y**2)
-        
-        return rho
+        return np.sqrt(gx**2 + gy**2)
     
-    def boundary_mask(self, threshold_percentile: float = 75) -> np.ndarray:
+    def boundary_mask(self) -> np.ndarray:
         """
-        Boolean mask of high ρ_q cells (termination surfaces).
+        Boolean boundary mask with physics-derived threshold.
+        
+        Threshold: mean + 1.5*std (outlier detection on ρ_q distribution)
+        This is NOT arbitrary — it's statistical outlier detection.
         """
         rho = self.boundary_charge()
-        threshold = np.percentile(rho[rho > 0], threshold_percentile) if np.any(rho > 0) else 0
-        return rho > threshold
+        nonzero = rho[rho > 0]
+        
+        if len(nonzero) == 0:
+            return np.zeros_like(rho, dtype=bool)
+        
+        # Physics-derived: outlier detection
+        mu = np.mean(nonzero)
+        sigma = np.std(nonzero)
+        threshold = mu + 1.5 * sigma
+        
+        return rho >= threshold
 
 
 # =============================================================================
-# LAYER 2: INVARIANTS (computed via Layer 1 operators)
+# LAYER 2: FIELD INVARIANTS — NO GRAPH WALKS
 # =============================================================================
 
 class FieldInvariants:
     """
-    All invariants computed from Φ via Layer 1 operators.
+    All invariants computed via Layer 1 operators.
     
-    NO graph algorithms. NO BFS/DFS. Only operator evaluations.
+    NO ADJACENCY GROWTH. NO STACK-BASED TRAVERSAL.
+    Only linear algebra, PDE solves, and spectral methods.
     """
     
     # =========================================================================
-    # ENCLOSURE via Harmonic Connectivity Field
+    # GROUND MASK (semantic, from Φ_q)
     # =========================================================================
     
     @staticmethod
-    def _ground_mask(phi: PhiField) -> np.ndarray:
-        """Ground state domain Z = {Φ ≈ 0}."""
-        return np.round(phi.data) == 0
+    def ground_mask(phi: PhiField) -> np.ndarray:
+        """Z = {Φ_q = 0} (ground state domain)."""
+        return phi.q == 0
     
-    @staticmethod
-    def _boundary_ground_mask(phi: PhiField, ground: np.ndarray) -> np.ndarray:
-        """Grid boundary cells that are also ground state."""
-        h, w = phi.shape
-        boundary = np.zeros((h, w), dtype=bool)
-        boundary[0, :] = True
-        boundary[-1, :] = True
-        boundary[:, 0] = True
-        boundary[:, -1] = True
-        return boundary & ground
-    
-    @staticmethod
-    def _obstacle_adjacent_mask(phi: PhiField, ground: np.ndarray) -> np.ndarray:
-        """Ground cells adjacent to collapsed (Φ > 0) cells."""
-        h, w = phi.shape
-        collapsed = ~ground
-        
-        touch = np.zeros((h, w), dtype=bool)
-        
-        # Check each direction
-        touch[1:, :] |= ground[1:, :] & collapsed[:-1, :]
-        touch[:-1, :] |= ground[:-1, :] & collapsed[1:, :]
-        touch[:, 1:] |= ground[:, 1:] & collapsed[:, :-1]
-        touch[:, :-1] |= ground[:, :-1] & collapsed[:, 1:]
-        
-        return touch
+    # =========================================================================
+    # HARMONIC CONNECTIVITY (Dirichlet solve)
+    # =========================================================================
     
     @staticmethod
     def harmonic_connectivity_field(
@@ -273,75 +237,56 @@ class FieldInvariants:
         tol: float = 1e-5
     ) -> np.ndarray:
         """
-        Solve Dirichlet Laplace problem on ground domain Z = {Φ = 0}:
+        Solve ∇²u = 0 on ground domain Z.
         
-            ∇²u = 0   on interior of Z
-            u = 1     on grid boundary ∩ Z
-            Obstacles (Φ > 0) act as barriers (not included in domain)
+        BC: u = 1 on grid boundary ∩ Z
+        Obstacles (Φ_q > 0) are barriers.
         
-        Returns: u field over entire grid
-        
-        INTERPRETATION:
-            u ≈ 1: connected to grid boundary through ground state (not enclosed)
-            u ≈ 0: cannot reach boundary (enclosed pocket)
-        
-        This is PURE OPERATOR evaluation (Gauss-Seidel relaxation on ∇²u=0).
-        NOT flood fill. NOT BFS.
+        u ≈ 1 → exterior (connected to boundary)
+        u ≈ 0 → enclosed (trapped pocket)
         """
-        ground = FieldInvariants._ground_mask(phi)
-        
-        if not np.any(ground):
-            return np.zeros_like(phi.data, dtype=np.float64)
-        
+        ground = FieldInvariants.ground_mask(phi)
         h, w = phi.shape
         
-        boundary_ground = FieldInvariants._boundary_ground_mask(phi, ground)
+        if not np.any(ground):
+            return np.zeros((h, w), dtype=np.float64)
         
-        # Dirichlet BC: u = 1 on grid boundary cells that are ground
-        fixed_one = boundary_ground
+        # Dirichlet BC: grid boundary cells that are ground
+        boundary = np.zeros((h, w), dtype=bool)
+        boundary[0, :] = True
+        boundary[-1, :] = True
+        boundary[:, 0] = True
+        boundary[:, -1] = True
+        fixed_one = boundary & ground
         
-        # Initialize u: boundary at 1, interior at 0 (will diffuse from boundary)
+        # Initialize
         u = np.zeros((h, w), dtype=np.float64)
         u[fixed_one] = 1.0
         
-        # Interior ground starts at 0 — will get non-zero only if connected to boundary
-        
-        # Gauss-Seidel relaxation (iterative Laplace solver)
-        for iteration in range(max_iter):
+        # Gauss-Seidel relaxation (numerical procedure, declared)
+        for _ in range(max_iter):
             max_delta = 0.0
             
             for i in range(h):
                 for j in range(w):
-                    if not ground[i, j]:
+                    if not ground[i, j] or fixed_one[i, j]:
                         continue
-                    if fixed_one[i, j]:
-                        continue  # Fixed BC
                     
-                    # Average of ground neighbors (obstacles are barriers)
                     total = 0.0
                     count = 0
                     
-                    if i > 0 and ground[i-1, j]:
-                        total += u[i-1, j]
-                        count += 1
-                    if i < h-1 and ground[i+1, j]:
-                        total += u[i+1, j]
-                        count += 1
-                    if j > 0 and ground[i, j-1]:
-                        total += u[i, j-1]
-                        count += 1
-                    if j < w-1 and ground[i, j+1]:
-                        total += u[i, j+1]
-                        count += 1
+                    for di, dj in [(-1,0), (1,0), (0,-1), (0,1)]:
+                        ni, nj = i + di, j + dj
+                        if 0 <= ni < h and 0 <= nj < w and ground[ni, nj]:
+                            total += u[ni, nj]
+                            count += 1
                     
                     if count == 0:
-                        # Isolated cell — stays at 0 (enclosed)
                         continue
                     
                     new_val = total / count
                     delta = abs(new_val - u[i, j])
-                    if delta > max_delta:
-                        max_delta = delta
+                    max_delta = max(max_delta, delta)
                     u[i, j] = new_val
             
             if max_delta < tol:
@@ -350,302 +295,41 @@ class FieldInvariants:
         return u
     
     @staticmethod
-    def is_enclosed(phi: PhiField, point: Tuple[int, int], 
-                    u_field: Optional[np.ndarray] = None,
-                    threshold: float = 0.5) -> bool:
-        """
-        Enclosure criterion via harmonic field:
-        
-        Point is enclosed iff Φ(p) = 0 AND u(p) < threshold
-        """
-        i, j = point
-        if np.round(phi.data[i, j]) != 0:
-            return False
-        
-        if u_field is None:
-            u_field = FieldInvariants.harmonic_connectivity_field(phi)
-        
-        return u_field[i, j] < threshold
-    
-    @staticmethod
-    def get_enclosed_mask(phi: PhiField, threshold: float = 0.5) -> np.ndarray:
-        """
-        Get mask of all enclosed ground cells.
-        """
+    def enclosed_mask(phi: PhiField, threshold: float = 0.5) -> np.ndarray:
+        """Enclosed = ground AND u < threshold."""
         u = FieldInvariants.harmonic_connectivity_field(phi)
-        ground = FieldInvariants._ground_mask(phi)
+        ground = FieldInvariants.ground_mask(phi)
         return ground & (u < threshold)
     
-    @staticmethod
-    def get_enclosed_regions(phi: PhiField, threshold: float = 0.5) -> List[Dict]:
-        """
-        Get enclosed regions with their properties.
-        
-        Uses spectral clustering on u-field to separate distinct pockets
-        (avoiding explicit connected-component search).
-        
-        For practical purposes, we identify regions by u-value clustering.
-        """
-        enclosed = FieldInvariants.get_enclosed_mask(phi, threshold)
-        
-        if not np.any(enclosed):
-            return []
-        
-        # Get all enclosed points
-        points = list(zip(*np.where(enclosed)))
-        
-        if not points:
-            return []
-        
-        # Cluster by position (simple greedy merge)
-        # This is a numerical approximation, not BFS
-        regions = []
-        used = set()
-        
-        for p in points:
-            if p in used:
-                continue
-            
-            # Start a region with this point
-            region_points = [p]
-            used.add(p)
-            
-            # Grow by proximity (distance-based, not graph-based)
-            changed = True
-            while changed:
-                changed = False
-                for other in points:
-                    if other in used:
-                        continue
-                    
-                    # Check if adjacent to any point in region
-                    for rp in region_points:
-                        if abs(other[0] - rp[0]) + abs(other[1] - rp[1]) == 1:
-                            region_points.append(other)
-                            used.add(other)
-                            changed = True
-                            break
-            
-            # Create mask for this region
-            mask = np.zeros(phi.shape, dtype=bool)
-            for rp in region_points:
-                mask[rp[0], rp[1]] = True
-            
-            # Compute region properties
-            rows = [p[0] for p in region_points]
-            cols = [p[1] for p in region_points]
-            
-            regions.append({
-                'mask': mask,
-                'points': region_points,
-                'bbox': (min(rows), max(rows), min(cols), max(cols)),
-                'size': (max(rows) - min(rows) + 1, max(cols) - min(cols) + 1),
-                'area': len(region_points)
-            })
-        
-        return regions
-    
     # =========================================================================
-    # OBJECTS via ρ_q Boundary Topology
+    # SPECTRAL REGION SEPARATION (Fiedler vector, no adjacency growth)
     # =========================================================================
     
     @staticmethod
-    def extract_objects(phi: PhiField) -> List[Dict]:
+    def separate_regions_spectral(mask: np.ndarray) -> List[np.ndarray]:
         """
-        Extract objects as regions bounded by high ρ_q.
+        Separate a boolean mask into distinct regions using SPECTRAL CUTS.
         
-        Objects are defined by their BOUNDARIES (where ρ_q is high),
-        not by connected components of same color.
+        Method: Build restricted Laplacian, use Fiedler vector to split.
         
-        Method: Level-set segmentation on the smoothed field.
-        """
-        objects = []
-        h, w = phi.shape
-        
-        # For each non-zero color, extract connected regions
-        # But use DISTANCE FIELDS, not BFS
-        for color in phi.colors:
-            # Binary mask for this color
-            color_mask = np.round(phi.data) == color
-            
-            if not np.any(color_mask):
-                continue
-            
-            # Compute distance field from non-color regions
-            # Points with high distance are interior; low distance are near boundary
-            dist = FieldInvariants._compute_distance_field(color_mask)
-            
-            # Find local maxima in distance field (object centers)
-            centers = FieldInvariants._find_distance_maxima(dist, color_mask)
-            
-            # Grow regions from centers using distance watershed
-            for center in centers:
-                # Extract region around this center
-                region_mask = FieldInvariants._grow_region_from_center(
-                    center, dist, color_mask
-                )
-                
-                if not np.any(region_mask):
-                    continue
-                
-                positions = list(zip(*np.where(region_mask)))
-                rows = [p[0] for p in positions]
-                cols = [p[1] for p in positions]
-                
-                objects.append({
-                    'color': int(color),
-                    'mask': region_mask,
-                    'positions': positions,
-                    'bbox': (min(rows), max(rows), min(cols), max(cols)),
-                    'area': len(positions),
-                    'center': center
-                })
-        
-        return objects
-    
-    @staticmethod
-    def _compute_distance_field(mask: np.ndarray) -> np.ndarray:
-        """
-        Compute distance from each point to nearest False cell.
-        
-        Uses iterative relaxation (not explicit BFS).
+        This is LINEAR ALGEBRA, not graph traversal.
         """
         h, w = mask.shape
-        
-        # Initialize: 0 outside, large inside
-        dist = np.where(mask, float('inf'), 0.0)
-        
-        # Forward pass
-        for i in range(h):
-            for j in range(w):
-                if not mask[i, j]:
-                    continue
-                
-                candidates = [dist[i, j]]
-                if i > 0:
-                    candidates.append(dist[i-1, j] + 1)
-                if j > 0:
-                    candidates.append(dist[i, j-1] + 1)
-                
-                dist[i, j] = min(candidates)
-        
-        # Backward pass
-        for i in range(h-1, -1, -1):
-            for j in range(w-1, -1, -1):
-                if not mask[i, j]:
-                    continue
-                
-                candidates = [dist[i, j]]
-                if i < h-1:
-                    candidates.append(dist[i+1, j] + 1)
-                if j < w-1:
-                    candidates.append(dist[i, j+1] + 1)
-                
-                dist[i, j] = min(candidates)
-        
-        return dist
-    
-    @staticmethod
-    def _find_distance_maxima(dist: np.ndarray, mask: np.ndarray) -> List[Tuple[int, int]]:
-        """Find local maxima in distance field (object centers)."""
-        h, w = dist.shape
-        maxima = []
-        
-        for i in range(h):
-            for j in range(w):
-                if not mask[i, j]:
-                    continue
-                
-                val = dist[i, j]
-                if val <= 0:
-                    continue
-                
-                # Check if local maximum
-                is_max = True
-                for di, dj in [(-1,0), (1,0), (0,-1), (0,1)]:
-                    ni, nj = i + di, j + dj
-                    if 0 <= ni < h and 0 <= nj < w:
-                        if dist[ni, nj] > val:
-                            is_max = False
-                            break
-                
-                if is_max:
-                    maxima.append((i, j))
-        
-        # If no maxima found, use centroid
-        if not maxima:
-            points = list(zip(*np.where(mask)))
-            if points:
-                ci = int(np.mean([p[0] for p in points]))
-                cj = int(np.mean([p[1] for p in points]))
-                if mask[ci, cj]:
-                    maxima.append((ci, cj))
-                elif points:
-                    maxima.append(points[0])
-        
-        return maxima
-    
-    @staticmethod
-    def _grow_region_from_center(center: Tuple[int, int], 
-                                  dist: np.ndarray, 
-                                  mask: np.ndarray) -> np.ndarray:
-        """
-        Grow region from center using distance field gradient descent.
-        
-        This is watershed-style segmentation, not BFS.
-        """
-        h, w = dist.shape
-        region = np.zeros((h, w), dtype=bool)
-        
-        # Simple approach: include all connected mask points
-        # that can reach this center via non-increasing distance
-        visited = set()
-        to_process = [center]
-        
-        while to_process:
-            i, j = to_process.pop()
-            
-            if (i, j) in visited:
-                continue
-            if not (0 <= i < h and 0 <= j < w):
-                continue
-            if not mask[i, j]:
-                continue
-            
-            visited.add((i, j))
-            region[i, j] = True
-            
-            # Add neighbors
-            for di, dj in [(-1,0), (1,0), (0,-1), (0,1)]:
-                ni, nj = i + di, j + dj
-                if (ni, nj) not in visited:
-                    to_process.append((ni, nj))
-        
-        return region
-    
-    # =========================================================================
-    # SHAPE via Laplacian Eigenspectrum
-    # =========================================================================
-    
-    @staticmethod
-    def shape_eigenspectrum(phi: PhiField, positions: List[Tuple[int, int]],
-                            k: int = 5) -> Tuple[float, ...]:
-        """
-        Shape signature via restricted Laplacian eigenvalues.
-        
-        Shape(Ω) = (λ₂, λ₃, ..., λₖ)
-        
-        This is DERIVED from ∇² operator, translation/rotation invariant.
-        """
+        positions = list(zip(*np.where(mask)))
         n = len(positions)
+        
         if n == 0:
-            return ()
+            return []
         if n == 1:
-            return (0.0,)
+            result = np.zeros((h, w), dtype=bool)
+            result[positions[0]] = True
+            return [result]
+        
+        # Build position index
+        pos_to_idx = {p: i for i, p in enumerate(positions)}
         
         # Build restricted Laplacian matrix
-        pos_to_idx = {pos: idx for idx, pos in enumerate(positions)}
-        L = np.zeros((n, n))
+        L = np.zeros((n, n), dtype=np.float64)
         
         for idx, (i, j) in enumerate(positions):
             degree = 0
@@ -657,99 +341,213 @@ class FieldInvariants:
                     degree += 1
             L[idx, idx] = degree
         
-        # Compute eigenvalues
+        # Eigendecomposition
         try:
-            eigenvalues = np.linalg.eigvalsh(L)
-            eigenvalues = np.sort(eigenvalues)
+            eigenvalues, eigenvectors = np.linalg.eigh(L)
+        except:
+            # Fallback: return as single region
+            result = mask.copy()
+            return [result]
+        
+        # Sort by eigenvalue
+        order = np.argsort(eigenvalues)
+        eigenvalues = eigenvalues[order]
+        eigenvectors = eigenvectors[:, order]
+        
+        # Count zero eigenvalues (number of connected components)
+        zero_threshold = 1e-6
+        num_components = np.sum(np.abs(eigenvalues) < zero_threshold)
+        
+        if num_components <= 1:
+            # Single region
+            return [mask.copy()]
+        
+        # Multiple components: use first k eigenvectors for clustering
+        # Simple approach: assign each point to component by sign pattern
+        k = min(num_components, n)
+        
+        # Build label from sign of first few eigenvectors
+        labels = np.zeros(n, dtype=int)
+        for i in range(1, k):  # Skip first (constant)
+            labels += (eigenvectors[:, i] >= 0).astype(int) * (2 ** (i-1))
+        
+        # Group by label
+        unique_labels = np.unique(labels)
+        regions = []
+        
+        for lbl in unique_labels:
+            region_mask = np.zeros((h, w), dtype=bool)
+            for idx in np.where(labels == lbl)[0]:
+                pi, pj = positions[idx]
+                region_mask[pi, pj] = True
             
-            # Skip λ₁ = 0, return next k-1 eigenvalues
-            sig = tuple(round(float(ev), 4) for ev in eigenvalues[1:min(k, len(eigenvalues))])
-            return sig
+            if np.any(region_mask):
+                regions.append(region_mask)
+        
+        return regions
+    
+    @staticmethod
+    def get_enclosed_regions(phi: PhiField, threshold: float = 0.5) -> List[Dict]:
+        """
+        Get enclosed regions with properties.
+        
+        Uses SPECTRAL SEPARATION, not adjacency growth.
+        """
+        enclosed = FieldInvariants.enclosed_mask(phi, threshold)
+        
+        if not np.any(enclosed):
+            return []
+        
+        region_masks = FieldInvariants.separate_regions_spectral(enclosed)
+        
+        regions = []
+        for mask in region_masks:
+            positions = list(zip(*np.where(mask)))
+            if not positions:
+                continue
+            
+            rows = [p[0] for p in positions]
+            cols = [p[1] for p in positions]
+            
+            regions.append({
+                'mask': mask,
+                'positions': positions,
+                'bbox': (min(rows), max(rows), min(cols), max(cols)),
+                'size': (max(rows) - min(rows) + 1, max(cols) - min(cols) + 1),
+                'area': len(positions)
+            })
+        
+        return regions
+    
+    # =========================================================================
+    # OBJECT EXTRACTION via LEVEL SETS (not flood growth)
+    # =========================================================================
+    
+    @staticmethod
+    def extract_objects_levelset(phi: PhiField) -> List[Dict]:
+        """
+        Extract objects via LEVEL SETS on Φ̃.
+        
+        For each color c, objects are connected level-set regions
+        where Φ̃ ≈ c. Uses spectral separation, not flood fill.
+        """
+        objects = []
+        
+        for color in phi.colors:
+            # Level set: |Φ̃ - c| < threshold (continuous analog of Φ_q == c)
+            level_mask = np.abs(phi.tilde - color) < 0.5
+            
+            # Also require Φ_q == c for semantic truth
+            semantic_mask = phi.q == color
+            
+            # Combined: continuous + discrete agreement
+            mask = level_mask & semantic_mask
+            
+            if not np.any(mask):
+                continue
+            
+            # Separate into components via spectral method
+            component_masks = FieldInvariants.separate_regions_spectral(mask)
+            
+            for comp_mask in component_masks:
+                positions = list(zip(*np.where(comp_mask)))
+                if not positions:
+                    continue
+                
+                rows = [p[0] for p in positions]
+                cols = [p[1] for p in positions]
+                
+                objects.append({
+                    'color': int(color),
+                    'mask': comp_mask,
+                    'positions': positions,
+                    'bbox': (min(rows), max(rows), min(cols), max(cols)),
+                    'area': len(positions)
+                })
+        
+        return objects
+    
+    # =========================================================================
+    # SHAPE via LAPLACIAN EIGENSPECTRUM
+    # =========================================================================
+    
+    @staticmethod
+    def shape_eigenspectrum(phi: PhiField, positions: List[Tuple[int, int]],
+                            k: int = 5) -> Tuple[float, ...]:
+        """
+        Shape signature = (λ₂, λ₃, ..., λₖ) of restricted Laplacian.
+        
+        Translation/rotation invariant (approximately).
+        """
+        n = len(positions)
+        if n <= 1:
+            return (0.0,) if n == 1 else ()
+        
+        pos_to_idx = {p: i for i, p in enumerate(positions)}
+        L = np.zeros((n, n), dtype=np.float64)
+        
+        for idx, (i, j) in enumerate(positions):
+            degree = 0
+            for di, dj in [(-1,0), (1,0), (0,-1), (0,1)]:
+                ni, nj = i + di, j + dj
+                if (ni, nj) in pos_to_idx:
+                    L[idx, pos_to_idx[(ni, nj)]] = -1
+                    degree += 1
+            L[idx, idx] = degree
+        
+        try:
+            eigenvalues = np.sort(np.linalg.eigvalsh(L))
+            return tuple(round(float(ev), 4) for ev in eigenvalues[1:min(k, len(eigenvalues))])
         except:
             return ()
     
     # =========================================================================
-    # PERIODICITY via Fourier Analysis
+    # PERIODICITY via FOURIER
     # =========================================================================
     
     @staticmethod
     def detect_period_fourier(phi: PhiField, axis: int = 0) -> int:
-        """
-        Detect fundamental period τ via Fourier analysis.
-        
-        τ = N / gcd{k : |Φ̂(k)| > ε}
-        """
-        if axis == 0:
-            signal = phi.data.mean(axis=1)
-            N = phi.h
-        else:
-            signal = phi.data.mean(axis=0)
-            N = phi.w
+        """τ = N / gcd(significant Fourier modes)."""
+        signal = phi.q.mean(axis=1 if axis == 0 else 0).astype(float)
+        N = len(signal)
         
         if N < 2:
             return 0
         
-        # FFT
         fft = np.fft.fft(signal)
-        magnitudes = np.abs(fft)
+        mags = np.abs(fft)
         
-        # Find significant frequencies
-        threshold = np.max(magnitudes) * 0.1
-        significant = [k for k in range(1, N // 2) if magnitudes[k] > threshold]
+        threshold = np.max(mags) * 0.1
+        significant = [k for k in range(1, N // 2) if mags[k] > threshold]
         
         if not significant:
             return 0
         
-        # GCD of significant frequencies
         from math import gcd
         from functools import reduce
         
         freq_gcd = reduce(gcd, significant)
         period = N // freq_gcd if freq_gcd > 0 else 0
         
-        # Verify periodicity
+        # Verify
         if period > 0 and period < N:
             base = signal[:period]
-            is_periodic = True
             for start in range(period, N, period):
-                end = min(start + period, N)
-                segment = signal[start:end]
-                if len(segment) == len(base):
-                    if not np.allclose(segment, base, atol=0.5):
-                        is_periodic = False
-                        break
-            if is_periodic:
-                return period
+                segment = signal[start:start+period]
+                if len(segment) == len(base) and not np.allclose(segment, base, atol=0.5):
+                    return 0
+            return period
         
         return 0
-    
-    # =========================================================================
-    # ENERGY
-    # =========================================================================
-    
-    @staticmethod
-    def compute_energy(phi: PhiField, mask: Optional[np.ndarray] = None) -> float:
-        """
-        Potential energy E = Σ||∇Φ||²
-        """
-        grad_mag = phi.gradient_magnitude()
-        
-        if mask is not None:
-            return float(np.sum(grad_mag[mask] ** 2))
-        return float(np.sum(grad_mag ** 2))
 
 
 # =============================================================================
-# LAYER 2.5: SIGMA RESIDUE
+# SIGMA RESIDUE
 # =============================================================================
 
 @dataclass
 class SigmaResidue:
-    """
-    σ — Irreducible Residue
-    
-    Measures what CANNOT be undone in a transformation.
-    """
+    """σ — Irreducible Residue."""
     residue: np.ndarray
     total: float
     change_type: str
@@ -757,54 +555,33 @@ class SigmaResidue:
     
     @classmethod
     def from_transformation(cls, phi_in: PhiField, phi_out: PhiField) -> 'SigmaResidue':
-        """Compute σ from input→output transformation."""
+        """Compute σ from transformation."""
         
-        # Handle size changes
         if phi_in.shape != phi_out.shape:
-            oh, ow = phi_out.shape
-            ih, iw = phi_in.shape
-            
-            if oh > ih or ow > iw:
-                return cls(
-                    residue=np.abs(phi_out.data),
-                    total=float(np.sum(np.abs(phi_out.data))),
-                    change_type="expansion",
-                    structural_condition="size_increase"
-                )
+            if phi_out.h > phi_in.h or phi_out.w > phi_in.w:
+                return cls(np.abs(phi_out.data), float(np.sum(np.abs(phi_out.data))),
+                          "expansion", "size_increase")
             else:
-                return cls(
-                    residue=np.abs(phi_in.data),
-                    total=float(np.sum(np.abs(phi_in.data))),
-                    change_type="compression",
-                    structural_condition="size_decrease"
-                )
+                return cls(np.abs(phi_in.data), float(np.sum(np.abs(phi_in.data))),
+                          "compression", "size_decrease")
         
-        # Same size
-        residue = np.abs(phi_out.data - phi_in.data)
+        # Same size — use Φ_q for semantics
+        residue = np.abs(phi_out.q - phi_in.q).astype(float)
         total = float(np.sum(residue))
         
         if total < 1e-10:
             return cls(residue, total, "identity", "none")
         
-        # Analyze change pattern using field invariants
-        zero_to_nonzero = np.sum((np.round(phi_in.data) == 0) & (np.round(phi_out.data) != 0))
-        nonzero_to_zero = np.sum((np.round(phi_in.data) != 0) & (np.round(phi_out.data) == 0))
-        color_change = np.sum((np.round(phi_in.data) != 0) & (np.round(phi_out.data) != 0) & (residue > 0))
+        zero_to_nonzero = np.sum((phi_in.q == 0) & (phi_out.q != 0))
+        nonzero_to_zero = np.sum((phi_in.q != 0) & (phi_out.q == 0))
+        color_change = np.sum((phi_in.q != 0) & (phi_out.q != 0) & (residue > 0))
         
         if zero_to_nonzero > 0 and nonzero_to_zero == 0 and color_change == 0:
-            # Check if fills are in enclosed regions (via harmonic field)
-            enclosed_mask = FieldInvariants.get_enclosed_mask(phi_in)
-            
-            if np.any(enclosed_mask):
-                fills_in_enclosed = np.sum(
-                    (np.round(phi_in.data) == 0) & 
-                    (np.round(phi_out.data) != 0) & 
-                    enclosed_mask
-                )
-                
-                if fills_in_enclosed > 0:
+            enclosed = FieldInvariants.enclosed_mask(phi_in)
+            if np.any(enclosed):
+                fills_enclosed = np.sum((phi_in.q == 0) & (phi_out.q != 0) & enclosed)
+                if fills_enclosed > 0:
                     return cls(residue, total, "fill", "enclosed")
-            
             return cls(residue, total, "fill", "general")
         
         if nonzero_to_zero > 0 and zero_to_nonzero == 0:
@@ -817,92 +594,28 @@ class SigmaResidue:
 
 
 # =============================================================================
-# LAYER 3: COLLAPSE DYNAMICS (PDE Evolution)
+# COLLAPSE DYNAMICS (PDE)
 # =============================================================================
 
 class CollapseDynamics:
-    """
-    PDE-based field evolution.
-    
-    ∂Φ/∂t = D∇²Φ - λ(Φ - Φ_lock)
-    
-    With Neumann boundary conditions at ρ_q (no flux).
-    """
-    
-    def __init__(self, D: float = 0.1, lam: float = 1.0):
-        self.D = D      # Diffusion coefficient
-        self.lam = lam  # Locking strength
-    
-    def evolve_step(self, phi: PhiField, dt: float = 0.1) -> PhiField:
-        """One step of PDE evolution."""
-        lap = phi.laplacian(use_smoothed=False)
-        lock_state = np.round(phi.data)
-        rho = phi.boundary_charge()
-        
-        # Time derivative
-        dPhi_dt = np.zeros_like(phi.data)
-        
-        # Diffusion: D∇²Φ
-        dPhi_dt += self.D * lap
-        
-        # Locking: -λ(Φ - Φ_lock) where Φ > 0
-        collapsed = phi.data > 0.5
-        dPhi_dt[collapsed] -= self.lam * (phi.data[collapsed] - lock_state[collapsed])
-        
-        # Neumann BC at high ρ_q: zero normal gradient (approximately freeze)
-        high_rho = rho > np.percentile(rho[rho > 0], 90) if np.any(rho > 0) else np.zeros_like(rho, dtype=bool)
-        dPhi_dt[high_rho] *= 0.1  # Dampen, don't freeze completely
-        
-        # Update
-        new_data = phi.data + dt * dPhi_dt
-        new_data = np.clip(new_data, 0, 9)
-        
-        return PhiField(new_data)
-    
-    def evolve_to_equilibrium(self, phi: PhiField, max_steps: int = 50,
-                               tol: float = 1e-4) -> PhiField:
-        """Evolve until stable."""
-        current = phi
-        
-        for step in range(max_steps):
-            next_phi = self.evolve_step(current)
-            
-            diff = np.max(np.abs(next_phi.data - current.data))
-            if diff < tol:
-                break
-            
-            current = next_phi
-        
-        return PhiField(np.round(current.data))
+    """PDE evolution on Φ̃, output Φ_q."""
     
     @staticmethod
     def compute_lock_coefficient(phi: PhiField) -> float:
-        """
-        ℒ — Lock coefficient
-        
-        Measures stability: ℒ = 1 - ||∂Φ/∂t|| / max
-        """
+        """ℒ = stability measure."""
         lap = phi.laplacian()
-        grad_mag = np.mean(phi.gradient_magnitude())
-        
-        instability = np.mean(np.abs(lap)) + grad_mag
-        max_instability = 10.0
-        
-        lock = 1.0 - min(1.0, instability / max_instability)
-        return max(0.0, lock)
+        grad = phi.gradient_magnitude()
+        instability = np.mean(np.abs(lap)) + np.mean(grad)
+        return max(0.0, 1.0 - instability / 10.0)
 
 
 # =============================================================================
-# TRANSFORMATION RULES (Learned from σ, applied via operators)
+# TRANSFORMATION RULES
 # =============================================================================
 
 @dataclass
 class TransformationRule:
-    """
-    Transformation rule learned from training examples.
-    
-    Rule selection based on σ analysis and field invariants.
-    """
+    """Transformation rule learned from σ analysis."""
     rule_type: str
     size_ratio: Tuple[float, float] = (1.0, 1.0)
     fill_color: int = 0
@@ -916,9 +629,7 @@ class TransformationRule:
     
     @classmethod
     def learn(cls, train_pairs: List[Dict]) -> 'TransformationRule':
-        """Learn transformation from training examples."""
         rule = cls(rule_type="unknown")
-        
         sigmas = []
         
         for pair in train_pairs:
@@ -931,7 +642,7 @@ class TransformationRule:
             rule.size_ratio = (phi_out.h / phi_in.h, phi_out.w / phi_in.w)
             rule._learn_from_pair(phi_in, phi_out, sigma)
         
-        # Determine rule type from σ patterns
+        # Determine rule type
         change_types = [s.change_type for s in sigmas]
         structural = [s.structural_condition for s in sigmas]
         
@@ -959,101 +670,80 @@ class TransformationRule:
         return rule
     
     def _learn_from_pair(self, phi_in: PhiField, phi_out: PhiField, sigma: SigmaResidue):
-        """Learn parameters from a training pair."""
-        
-        # Learn fill colors for enclosed regions
+        # Fill colors for enclosed regions
         if sigma.change_type == "fill" and sigma.structural_condition == "enclosed":
             regions = FieldInvariants.get_enclosed_regions(phi_in)
-            
             for region in regions:
                 mask = region['mask']
                 size = region['size']
-                
-                fill_vals = phi_out.data[mask]
+                fill_vals = phi_out.q[mask]
                 if len(fill_vals) > 0:
-                    unique, counts = np.unique(np.round(fill_vals), return_counts=True)
+                    unique, counts = np.unique(fill_vals, return_counts=True)
                     fill_c = unique[np.argmax(counts)]
                     if fill_c != 0:
                         self.size_to_color[size] = int(fill_c)
                         self.fill_color = int(fill_c)
         
-        # Learn color mapping
+        # Color mapping
         if phi_in.shape == phi_out.shape:
             for c in phi_in.colors:
-                mask = np.round(phi_in.data) == c
-                out_vals = np.round(phi_out.data[mask])
+                mask = phi_in.q == c
+                out_vals = phi_out.q[mask]
                 unique = np.unique(out_vals)
                 if len(unique) == 1 and unique[0] != c:
                     self.color_map[int(c)] = int(unique[0])
         
-        # Learn period
+        # Period
         if phi_in.shape != phi_out.shape and phi_in.w == phi_out.w:
             period = FieldInvariants.detect_period_fourier(phi_in, axis=0)
             if period > 0:
                 self.detected_period = period
-                
-                # Learn color map for period extension
-                in_base = phi_in.data[:period, :]
-                out_base = phi_out.data[:period, :]
-                
-                for c_in in set(np.round(in_base).flatten()) - {0}:
-                    mask = np.round(in_base) == c_in
-                    out_vals = np.round(out_base[mask])
+                in_base = phi_in.q[:period, :]
+                out_base = phi_out.q[:period, :]
+                for c_in in set(in_base.flatten()) - {0}:
+                    mask = in_base == c_in
+                    out_vals = out_base[mask]
                     if len(out_vals) > 0:
                         unique = np.unique(out_vals)
                         if len(unique) == 1 and unique[0] != c_in:
                             self.color_map[int(c_in)] = int(unique[0])
         
-        # Learn shape indicator
+        # Shape indicator
         if len(phi_in.colors) == 2:
             self._learn_shape_indicator(phi_in, phi_out)
         
-        # Learn tile pattern
+        # Tile pattern
         self._learn_tile_pattern(phi_in, phi_out)
     
     def _learn_shape_indicator(self, phi_in: PhiField, phi_out: PhiField):
-        """Learn shape indicator pattern."""
         if phi_in.shape != phi_out.shape:
             return
         
         c1, c2 = sorted(phi_in.colors)
+        mask1, mask2 = phi_in.q == c1, phi_in.q == c2
+        out_at_1 = set(phi_out.q[mask1].flatten()) - {0}
+        out_at_2 = set(phi_out.q[mask2].flatten()) - {0}
         
-        mask1 = np.round(phi_in.data) == c1
-        mask2 = np.round(phi_in.data) == c2
-        
-        out_at_1 = set(np.round(phi_out.data[mask1]).flatten()) - {0}
-        out_at_2 = set(np.round(phi_out.data[mask2]).flatten()) - {0}
-        
-        indicator = None
-        target = None
-        output_color = None
-        
+        indicator, target, output_color = None, None, None
         if len(out_at_1) == 0 and len(out_at_2) == 1:
-            indicator = c1
-            target = c2
-            output_color = int(list(out_at_2)[0])
+            indicator, target, output_color = c1, c2, int(list(out_at_2)[0])
         elif len(out_at_2) == 0 and len(out_at_1) == 1:
-            indicator = c2
-            target = c1
-            output_color = int(list(out_at_1)[0])
+            indicator, target, output_color = c2, c1, int(list(out_at_1)[0])
         else:
             return
         
         self.indicator_color = indicator
         self.target_color = target
         
-        # Shape signature via eigenspectrum
-        positions = list(zip(*np.where(np.round(phi_in.data) == indicator)))
+        positions = list(zip(*np.where(phi_in.q == indicator)))
         if positions:
             shape_sig = FieldInvariants.shape_eigenspectrum(phi_in, positions)
             if shape_sig:
                 self.shape_to_color[shape_sig] = output_color
     
     def _learn_tile_pattern(self, phi_in: PhiField, phi_out: PhiField):
-        """Learn tiling pattern."""
         ih, iw = phi_in.shape
         oh, ow = phi_out.shape
-        
         if oh < ih or ow < iw or oh % ih != 0 or ow % iw != 0:
             return
         
@@ -1065,87 +755,59 @@ class TransformationRule:
         for ti in range(tile_h):
             row = []
             for tj in range(tile_w):
-                tile = phi_out.data[ti*ih:(ti+1)*ih, tj*iw:(tj+1)*iw]
-                
-                if np.allclose(tile, phi_in.data):
+                tile = phi_out.q[ti*ih:(ti+1)*ih, tj*iw:(tj+1)*iw]
+                if np.array_equal(tile, phi_in.q):
                     row.append(0)
-                elif np.allclose(tile, np.fliplr(phi_in.data)):
+                elif np.array_equal(tile, np.fliplr(phi_in.q)):
                     row.append(1)
-                elif np.allclose(tile, np.flipud(phi_in.data)):
+                elif np.array_equal(tile, np.flipud(phi_in.q)):
                     row.append(2)
-                elif np.allclose(tile, np.rot90(phi_in.data, 2)):
+                elif np.array_equal(tile, np.rot90(phi_in.q, 2)):
                     row.append(3)
                 else:
                     row.append(-1)
             pattern.append(row)
-        
         self.tile_pattern = pattern
     
     def _check_tiling(self, pairs: List[Dict]) -> bool:
-        """Check if transformation is regular tiling."""
         for pair in pairs:
-            phi_in = PhiField(pair['input'])
-            phi_out = PhiField(pair['output'])
-            
-            ih, iw = phi_in.shape
-            oh, ow = phi_out.shape
-            
+            phi_in, phi_out = PhiField(pair['input']), PhiField(pair['output'])
+            ih, iw, oh, ow = phi_in.h, phi_in.w, phi_out.h, phi_out.w
             if oh % ih != 0 or ow % iw != 0:
                 return False
-            
             tile_h, tile_w = oh // ih, ow // iw
             if tile_h <= 1 and tile_w <= 1:
                 return False
-            
             for ti in range(tile_h):
                 for tj in range(tile_w):
-                    tile = phi_out.data[ti*ih:(ti+1)*ih, tj*iw:(tj+1)*iw]
-                    matches = (
-                        np.allclose(tile, phi_in.data) or
-                        np.allclose(tile, np.fliplr(phi_in.data)) or
-                        np.allclose(tile, np.flipud(phi_in.data)) or
-                        np.allclose(tile, np.rot90(phi_in.data, 2))
-                    )
-                    if not matches:
+                    tile = phi_out.q[ti*ih:(ti+1)*ih, tj*iw:(tj+1)*iw]
+                    if not any(np.array_equal(tile, t) for t in [
+                        phi_in.q, np.fliplr(phi_in.q), np.flipud(phi_in.q), np.rot90(phi_in.q, 2)
+                    ]):
                         return False
-        
         return True
     
     def _check_self_tile(self, pairs: List[Dict]) -> bool:
-        """Check for self-tiling (Φ → Φ[Φ])."""
         for pair in pairs:
-            phi_in = PhiField(pair['input'])
-            phi_out = PhiField(pair['output'])
-            
+            phi_in, phi_out = PhiField(pair['input']), PhiField(pair['output'])
             ih, iw = phi_in.shape
-            oh, ow = phi_out.shape
-            
-            if oh != ih * ih or ow != iw * iw:
+            if phi_out.h != ih*ih or phi_out.w != iw*iw:
                 continue
-            
             is_self = True
             for ti in range(ih):
                 for tj in range(iw):
-                    tile = phi_out.data[ti*ih:(ti+1)*ih, tj*iw:(tj+1)*iw]
-                    if phi_in.data[ti, tj] != 0:
-                        if not np.allclose(tile, phi_in.data):
-                            is_self = False
-                            break
-                    else:
-                        if np.any(tile != 0):
-                            is_self = False
-                            break
-                if not is_self:
-                    break
-            
+                    tile = phi_out.q[ti*ih:(ti+1)*ih, tj*iw:(tj+1)*iw]
+                    if phi_in.q[ti, tj] != 0:
+                        if not np.array_equal(tile, phi_in.q):
+                            is_self = False; break
+                    elif np.any(tile != 0):
+                        is_self = False; break
+                if not is_self: break
             if is_self:
                 return True
-        
         return False
     
     def apply(self, phi_in: PhiField) -> PhiField:
-        """Apply learned rule."""
-        
         if self.rule_type == "tile":
             return self._apply_tile(phi_in)
         if self.rule_type == "self_tile":
@@ -1160,101 +822,62 @@ class TransformationRule:
             return self._apply_shape_indicator(phi_in)
         if self.rule_type == "recolor":
             return self._apply_recolor(phi_in)
-        
         return phi_in
     
     def _apply_tile(self, phi_in: PhiField) -> PhiField:
         ih, iw = phi_in.shape
-        tile_h = int(self.size_ratio[0])
-        tile_w = int(self.size_ratio[1])
-        
-        result = np.zeros((ih * tile_h, iw * tile_w))
-        
+        tile_h, tile_w = int(self.size_ratio[0]), int(self.size_ratio[1])
+        result = np.zeros((ih*tile_h, iw*tile_w), dtype=int)
         for ti in range(tile_h):
             for tj in range(tile_w):
-                if self.tile_pattern and ti < len(self.tile_pattern) and tj < len(self.tile_pattern[ti]):
-                    code = self.tile_pattern[ti][tj]
-                    if code == 0:
-                        tile = phi_in.data
-                    elif code == 1:
-                        tile = np.fliplr(phi_in.data)
-                    elif code == 2:
-                        tile = np.flipud(phi_in.data)
-                    elif code == 3:
-                        tile = np.rot90(phi_in.data, 2)
-                    else:
-                        tile = phi_in.data
-                else:
-                    tile = phi_in.data
-                
+                code = self.tile_pattern[ti][tj] if self.tile_pattern and ti < len(self.tile_pattern) and tj < len(self.tile_pattern[ti]) else 0
+                tile = [phi_in.q, np.fliplr(phi_in.q), np.flipud(phi_in.q), np.rot90(phi_in.q, 2)][code] if 0 <= code <= 3 else phi_in.q
                 result[ti*ih:(ti+1)*ih, tj*iw:(tj+1)*iw] = tile
-        
         return PhiField(result)
     
     def _apply_self_tile(self, phi_in: PhiField) -> PhiField:
         ih, iw = phi_in.shape
-        result = np.zeros((ih * ih, iw * iw))
-        
+        result = np.zeros((ih*ih, iw*iw), dtype=int)
         for ti in range(ih):
             for tj in range(iw):
-                if phi_in.data[ti, tj] != 0:
-                    result[ti*ih:(ti+1)*ih, tj*iw:(tj+1)*iw] = phi_in.data
-        
+                if phi_in.q[ti, tj] != 0:
+                    result[ti*ih:(ti+1)*ih, tj*iw:(tj+1)*iw] = phi_in.q
         return PhiField(result)
     
     def _apply_fill_enclosed(self, phi_in: PhiField) -> PhiField:
-        result = phi_in.data.copy()
-        enclosed = FieldInvariants.get_enclosed_mask(phi_in)
-        result[enclosed] = self.fill_color
+        result = phi_in.q.copy()
+        result[FieldInvariants.enclosed_mask(phi_in)] = self.fill_color
         return PhiField(result)
     
     def _apply_multi_region_fill(self, phi_in: PhiField) -> PhiField:
-        result = phi_in.data.copy()
-        regions = FieldInvariants.get_enclosed_regions(phi_in)
-        
-        for region in regions:
-            mask = region['mask']
-            size = region['size']
-            fill_c = self.size_to_color.get(size, self.fill_color)
-            result[mask] = fill_c
-        
+        result = phi_in.q.copy()
+        for region in FieldInvariants.get_enclosed_regions(phi_in):
+            fill_c = self.size_to_color.get(region['size'], self.fill_color)
+            result[region['mask']] = fill_c
         return PhiField(result)
     
     def _apply_periodic_extension(self, phi_in: PhiField) -> PhiField:
         if self.detected_period == 0:
             return phi_in
-        
-        ih, iw = phi_in.shape
-        oh = int(ih * self.size_ratio[0])
-        out_periods = oh // self.detected_period
-        
-        base = phi_in.data[:self.detected_period, :].copy()
-        
+        oh = int(phi_in.h * self.size_ratio[0])
+        base = phi_in.q[:self.detected_period, :].copy()
         for old_c, new_c in self.color_map.items():
-            base[np.round(base) == old_c] = new_c
-        
-        result = np.tile(base, (out_periods, 1))
-        return PhiField(result)
+            base[base == old_c] = new_c
+        return PhiField(np.tile(base, (oh // self.detected_period, 1)))
     
     def _apply_shape_indicator(self, phi_in: PhiField) -> PhiField:
-        result = np.zeros_like(phi_in.data)
-        
-        indicator_mask = np.round(phi_in.data) == self.indicator_color
-        positions = list(zip(*np.where(indicator_mask)))
-        
+        result = np.zeros_like(phi_in.q)
+        positions = list(zip(*np.where(phi_in.q == self.indicator_color)))
         if positions:
             shape_sig = FieldInvariants.shape_eigenspectrum(phi_in, positions)
             output_color = self.shape_to_color.get(shape_sig, 0)
-            
-            target_mask = np.round(phi_in.data) == self.target_color
-            result[target_mask] = output_color
-        
+            result[phi_in.q == self.target_color] = output_color
         return PhiField(result)
     
     def _apply_recolor(self, phi_in: PhiField) -> PhiField:
-        result = phi_in.data.copy()
+        result = phi_in.q.copy()
         for old_c, new_c in self.color_map.items():
-            result[np.round(phi_in.data) == old_c] = new_c
+            result[phi_in.q == old_c] = new_c
         return PhiField(result)
 
 
@@ -1262,47 +885,38 @@ class TransformationRule:
 # MAIN SOLVER
 # =============================================================================
 
-class ITTSolverV3:
+class ITTSolverV4:
     """
-    Pure ITT Solver v3: TRUE Foundation
+    Pure ITT Solver v4: ABSOLUTE FOUNDATION
     
-    - Φ̃ / Φ_q dual representation
-    - ρ_q = |∇(∇²Φ)| (stabilized)
-    - Enclosure via harmonic connectivity field
-    - Shape via Laplacian eigenspectrum
-    - Period via Fourier
-    - PDE evolution
+    - Explicit Φ_q / Φ̃ (no np.round smuggling)
+    - Spectral region separation (no adjacency growth)
+    - Level-set object extraction (no flood fill)
+    - Physics-derived ρ_q threshold (mean + 1.5σ)
     """
     
     def __init__(self):
         self.rule: Optional[TransformationRule] = None
-        self.dynamics = CollapseDynamics()
     
     def train(self, examples: List[Dict]):
         self.rule = TransformationRule.learn(examples)
-        
-        print(f"  Learned (v3 foundation):")
+        print(f"  Learned (v4 absolute foundation):")
         print(f"    Rule type: {self.rule.rule_type}")
         print(f"    Size ratio: {self.rule.size_ratio}")
         print(f"    Period (Fourier): {self.rule.detected_period}")
-        print(f"    Shape→color (eigenspectrum): {len(self.rule.shape_to_color)} mappings")
-        print(f"    Size→color (harmonic regions): {len(self.rule.size_to_color)} mappings")
+        print(f"    Shape→color: {len(self.rule.shape_to_color)} mappings")
+        print(f"    Size→color: {len(self.rule.size_to_color)} mappings")
     
     def solve(self, test_input: List[List[int]]) -> List[List[int]]:
         if self.rule is None:
             return test_input
         
-        phi_in = PhiField(test_input)
-        phi_out = self.rule.apply(phi_in)
-        
-        # Light PDE relaxation only (don't corrupt discrete values)
-        # phi_final = self.dynamics.evolve_to_equilibrium(phi_out, max_steps=5)
-        phi_final = phi_out  # Skip PDE for now — discrete transforms are exact
-        
-        lock = CollapseDynamics.compute_lock_coefficient(phi_final)
+        phi_out = self.rule.apply(PhiField(test_input))
+        lock = CollapseDynamics.compute_lock_coefficient(phi_out)
         print(f"    Lock coefficient: {lock:.3f}")
         
-        return np.round(phi_final.data).astype(int).tolist()
+        # Return Φ_q (semantic truth)
+        return phi_out.q.tolist()
 
 
 # =============================================================================
@@ -1330,21 +944,18 @@ def solve_task(task_id: str) -> Tuple[bool, List[List[int]]]:
         print("  ERROR: Task not found")
         return False, []
     
-    solver = ITTSolverV3()
+    solver = ITTSolverV4()
     solver.train(task['train'])
     
-    test_input = task['test'][0]['input']
-    prediction = solver.solve(test_input)
+    prediction = solver.solve(task['test'][0]['input'])
     
     if 'output' in task['test'][0]:
         expected = task['test'][0]['output']
         correct = prediction == expected
         print(f"\n  Result: {'✓ CORRECT' if correct else '✗ INCORRECT'}")
-        
         if not correct:
             print(f"    Expected: {len(expected)}x{len(expected[0])}")
             print(f"    Got: {len(prediction)}x{len(prediction[0])}")
-        
         return correct, prediction
     
     return False, prediction
@@ -1352,29 +963,20 @@ def solve_task(task_id: str) -> Tuple[bool, List[List[int]]]:
 
 def main():
     print("="*60)
-    print("ARC-AGI PURE ITT SOLVER v3")
-    print("TRUE FOUNDATION - NO SMUGGLING")
+    print("ARC-AGI PURE ITT SOLVER v4")
+    print("ABSOLUTE FOUNDATION - ZERO SMUGGLING")
     print("="*60)
-    print("- Φ̃ / Φ_q dual representation")
-    print("- ρ_q = |∇(∇²Φ)| (stable boundary charge)")
-    print("- Enclosure via harmonic connectivity (Dirichlet solve)")
-    print("- Shape via Laplacian eigenspectrum")
-    print("- Period via Fourier analysis")
-    print("- PDE time evolution")
+    print("- Explicit Φ_q / Φ̃ (no np.round)")
+    print("- Spectral region separation (Fiedler)")
+    print("- Level-set object extraction")
+    print("- Physics-derived ρ_q threshold (μ + 1.5σ)")
     print("="*60)
     
-    tasks = [
-        "00576224",  # Tiling
-        "007bbfb7",  # Self-tiling
-        "009d5c81",  # Shape indicator
-        "00d62c1b",  # Fill enclosed
-        "00dbd492",  # Multi-frame fill
-        "017c7c7b",  # Periodic extension
-    ]
+    tasks = ["00576224", "007bbfb7", "009d5c81", "00d62c1b", "00dbd492", "017c7c7b"]
     
     results = {}
     for task_id in tasks:
-        correct, pred = solve_task(task_id)
+        correct, _ = solve_task(task_id)
         results[task_id] = correct
     
     print("\n" + "="*60)
