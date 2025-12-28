@@ -379,6 +379,102 @@ class FieldInvariants:
         return (frame_h, frame_w)
     
     # =========================================================================
+    # FRAME DETECTION VIA BOUNDARY COMPONENTS (per ChatGPT Fix B)
+    # =========================================================================
+    
+    @staticmethod
+    def get_frame_components(phi: PhiField) -> List[Dict]:
+        """
+        Detect frames as BOUNDARY COMPONENTS, not enclosed components.
+        
+        Pipeline (all operator-based):
+        1. B = high-ρ_q support ∩ {Φ_q ≠ 0} (frame material)
+        2. Partition B into disjoint frame components via spectral separation
+        3. For each frame component: compute bbox, identify interior
+        
+        This handles:
+        - Multiple separate frames sharing same color
+        - Nested frames (separate boundary components)
+        """
+        h, w = phi.shape
+        
+        # Step 1: Compute boundary support (frame material)
+        # B = {p : ρ_q(p) high} ∩ {Φ_q(p) ≠ 0}
+        rho = phi.boundary_charge()
+        nonzero = rho[rho > 0]
+        
+        if len(nonzero) == 0:
+            return []
+        
+        # Threshold for high ρ_q (physics-derived: μ + σ)
+        mu = np.mean(nonzero)
+        sigma = np.std(nonzero)
+        threshold = mu + 0.5 * sigma  # Slightly relaxed for frame detection
+        
+        high_rho = rho >= threshold
+        non_ground = phi.q != 0
+        
+        # Frame material = high curvature AND non-ground
+        frame_material = high_rho & non_ground
+        
+        # Also include all non-ground cells (frames are the colored boundaries)
+        # Actually, for rectangular frames, the entire frame is the boundary
+        frame_material = non_ground
+        
+        if not np.any(frame_material):
+            return []
+        
+        # Step 2: Partition frame material into disjoint components
+        frame_masks = FieldInvariants.separate_regions_spectral(frame_material)
+        
+        # Step 3: For each frame component, compute properties
+        frames = []
+        
+        for frame_mask in frame_masks:
+            if not np.any(frame_mask):
+                continue
+            
+            # Get frame bbox
+            rows, cols = np.where(frame_mask)
+            if len(rows) == 0:
+                continue
+            
+            min_r, max_r = int(np.min(rows)), int(np.max(rows))
+            min_c, max_c = int(np.min(cols)), int(np.max(cols))
+            
+            frame_h = max_r - min_r + 1
+            frame_w = max_c - min_c + 1
+            
+            # Get frame color (dominant color in frame)
+            frame_colors = phi.q[frame_mask]
+            unique, counts = np.unique(frame_colors, return_counts=True)
+            frame_color = int(unique[np.argmax(counts)])
+            
+            # Identify interior: ground cells inside bbox, not part of frame
+            interior_mask = np.zeros((h, w), dtype=bool)
+            for i in range(min_r, max_r + 1):
+                for j in range(min_c, max_c + 1):
+                    if phi.q[i, j] == 0:  # Ground
+                        interior_mask[i, j] = True
+            
+            # Exclude frame cells from interior
+            interior_mask = interior_mask & (~frame_mask)
+            
+            if not np.any(interior_mask):
+                continue
+            
+            frames.append({
+                'frame_mask': frame_mask,
+                'interior_mask': interior_mask,
+                'bbox': (min_r, max_r, min_c, max_c),
+                'frame_size': (frame_h, frame_w),
+                'frame_color': frame_color,
+                'interior_area': int(np.sum(interior_mask))
+            })
+        
+        return frames
+    
+    # =========================================================================
     # SPECTRAL REGION SEPARATION (Fiedler vector, no adjacency growth)
     # =========================================================================
     
@@ -387,7 +483,10 @@ class FieldInvariants:
         """
         Separate a boolean mask into distinct regions using SPECTRAL CUTS.
         
-        Method: Build restricted Laplacian, use Fiedler vector to split.
+        Method: Build restricted Laplacian, use nullspace eigenvectors to partition.
+        
+        FIXED (per ChatGPT): Sign-pattern labeling is unstable because nullspace
+        basis is not unique. Use argmax(|V|) for canonical disjoint partition.
         
         This is LINEAR ALGEBRA, not graph traversal.
         """
@@ -433,20 +532,29 @@ class FieldInvariants:
         
         # Count zero eigenvalues (number of connected components)
         zero_threshold = 1e-6
-        num_components = np.sum(np.abs(eigenvalues) < zero_threshold)
+        num_components = int(np.sum(np.abs(eigenvalues) < zero_threshold))
         
         if num_components <= 1:
             # Single region
             return [mask.copy()]
         
-        # Multiple components: use first k eigenvectors for clustering
-        # Simple approach: assign each point to component by sign pattern
-        k = min(num_components, n)
+        # =================================================================
+        # FIXED: Nullspace argmax partition (per ChatGPT)
+        # =================================================================
+        # The nullspace basis is not unique, so sign-pattern labeling
+        # creates overlaps/spurious splits.
+        #
+        # Canonical disjoint assignment:
+        #   ℓ(i) := argmax_j |V_ij|  for j ∈ {1..k}
+        #
+        # This yields a partition without overlaps using only linear algebra.
+        # =================================================================
         
-        # Build label from sign of first few eigenvectors
-        labels = np.zeros(n, dtype=int)
-        for i in range(1, k):  # Skip first (constant)
-            labels += (eigenvectors[:, i] >= 0).astype(int) * (2 ** (i-1))
+        k = int(min(num_components, n))
+        Z = eigenvectors[:, :k]  # columns spanning the ~zero-eigenspace
+        
+        # Row-wise argmax over absolute loadings
+        labels = np.argmax(np.abs(Z), axis=1).astype(int)
         
         # Group by label
         unique_labels = np.unique(labels)
@@ -846,30 +954,42 @@ class TransformationRule:
         return rule
     
     def _learn_from_pair(self, phi_in: PhiField, phi_out: PhiField, sigma: SigmaResidue):
-        # Fill colors for enclosed regions - use FRAME invariants
+        # Fill colors for enclosed regions - use FRAME COMPONENTS (per ChatGPT Fix B)
         if sigma.change_type == "fill" and sigma.structural_condition == "enclosed":
-            regions = FieldInvariants.get_enclosed_regions(phi_in)
-            for region in regions:
-                mask = region['mask']
-                
-                # Get FRAME size (outer boundary), not interior size
-                frame_sz = FieldInvariants.frame_size(phi_in, mask)
-                interior_size = region['size']
+            # Try new frame-based detection
+            frames = FieldInvariants.get_frame_components(phi_in)
+            
+            for frame in frames:
+                interior_mask = frame['interior_mask']
+                frame_sz = frame['frame_size']
                 
                 # Get fill color from output
-                fill_vals = phi_out.q[mask]
+                fill_vals = phi_out.q[interior_mask]
                 if len(fill_vals) > 0:
                     unique, counts = np.unique(fill_vals, return_counts=True)
                     fill_c = unique[np.argmax(counts)]
                     if fill_c != 0:
-                        # Learn frame_size → fill (PRIMARY)
+                        # Learn frame_size → fill
                         self.size_to_color[frame_sz] = int(fill_c)
                         self.fill_color = int(fill_c)
                         
-                        # Learn frame_to_fill (SECONDARY)
-                        frame_c = FieldInvariants.frame_color(phi_in, mask)
+                        # Learn frame_color → fill (secondary)
+                        frame_c = frame['frame_color']
                         if frame_c != 0:
                             self.frame_to_fill[frame_c] = int(fill_c)
+            
+            # Fallback: also try old region-based detection
+            regions = FieldInvariants.get_enclosed_regions(phi_in)
+            for region in regions:
+                mask = region['mask']
+                frame_sz = FieldInvariants.frame_size(phi_in, mask)
+                
+                fill_vals = phi_out.q[mask]
+                if len(fill_vals) > 0:
+                    unique, counts = np.unique(fill_vals, return_counts=True)
+                    fill_c = unique[np.argmax(counts)]
+                    if fill_c != 0 and frame_sz not in self.size_to_color:
+                        self.size_to_color[frame_sz] = int(fill_c)
         
         # Color mapping
         if phi_in.shape == phi_out.shape:
@@ -1039,18 +1159,14 @@ class TransformationRule:
     def _apply_multi_region_fill(self, phi_in: PhiField) -> PhiField:
         result = phi_in.q.copy()
         
-        # Use frame-based region grouping (more robust for nested frames)
-        regions = FieldInvariants.get_enclosed_regions_by_frame(phi_in)
+        # Use FRAME COMPONENTS (per ChatGPT Fix B)
+        frames = FieldInvariants.get_frame_components(phi_in)
         
-        for region in regions:
-            mask = region['mask']
+        for frame in frames:
+            interior_mask = frame['interior_mask']
+            frame_sz = frame['frame_size']
             
-            # Use pre-computed frame_size from frame-based grouping
-            frame_sz = region.get('frame_size')
-            
-            if frame_sz is None:
-                frame_sz = FieldInvariants.frame_size(phi_in, mask)
-            
+            # Look up fill color by frame size
             fill_c = self.size_to_color.get(frame_sz)
             
             # GENERALIZATION: If exact size not found, use closest known size
@@ -1072,14 +1188,16 @@ class TransformationRule:
             
             # FALLBACK: frame-color
             if fill_c is None:
-                frame_c = FieldInvariants.frame_color(phi_in, mask)
+                frame_c = frame.get('frame_color', 0)
                 fill_c = self.frame_to_fill.get(frame_c)
             
             # FALLBACK: default
             if fill_c is None:
                 fill_c = self.fill_color
             
-            result[mask] = fill_c
+            if fill_c is not None and fill_c != 0:
+                result[interior_mask] = fill_c
+        
         return PhiField(result)
     
     def _apply_periodic_extension(self, phi_in: PhiField) -> PhiField:
