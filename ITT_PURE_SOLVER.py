@@ -302,6 +302,83 @@ class FieldInvariants:
         return ground & (u < threshold)
     
     # =========================================================================
+    # FRAME-COLOR INVARIANT (per ChatGPT alignment)
+    # =========================================================================
+    
+    @staticmethod
+    def frame_color(phi: PhiField, region_mask: np.ndarray) -> int:
+        """
+        Frame-color invariant: Dominant Φ_q sampled on high-ρ_q boundary.
+        
+        FrameColor(Ω) := argmax_c Σ_{p ∈ B ∩ {Φ_q = c}} 1
+        
+        where B = boundary support (high ρ_q adjacent to region)
+        
+        This is the PRIMARY invariant for determining fill color.
+        """
+        h, w = phi.shape
+        rho = phi.boundary_charge()
+        
+        # Find boundary support: high ρ_q cells adjacent to the region
+        # Dilate region mask by 1 cell
+        dilated = np.zeros((h, w), dtype=bool)
+        for di, dj in [(-1,0), (1,0), (0,-1), (0,1)]:
+            shifted = np.roll(np.roll(region_mask, di, axis=0), dj, axis=1)
+            dilated |= shifted
+        
+        # Boundary = dilated minus original, intersected with non-ground
+        boundary = dilated & (~region_mask) & (phi.q != 0)
+        
+        if not np.any(boundary):
+            return 0
+        
+        # Sample Φ_q on boundary, find dominant color
+        boundary_colors = phi.q[boundary]
+        
+        if len(boundary_colors) == 0:
+            return 0
+        
+        # Count occurrences of each color
+        unique, counts = np.unique(boundary_colors, return_counts=True)
+        
+        # Return most common (argmax)
+        dominant_color = unique[np.argmax(counts)]
+        
+        return int(dominant_color)
+    
+    @staticmethod
+    def frame_size(phi: PhiField, region_mask: np.ndarray) -> Tuple[int, int]:
+        """
+        Frame-size invariant: Bounding box of the FRAME (ρ_q boundary), not the interior.
+        
+        This measures the outer extent of the enclosing structure.
+        """
+        h, w = phi.shape
+        
+        # Find frame boundary: non-zero cells adjacent to region
+        dilated = np.zeros((h, w), dtype=bool)
+        for di, dj in [(-1,0), (1,0), (0,-1), (0,1)]:
+            shifted = np.roll(np.roll(region_mask, di, axis=0), dj, axis=1)
+            dilated |= shifted
+        
+        # Boundary = dilated minus original, intersected with non-ground
+        boundary = dilated & (~region_mask) & (phi.q != 0)
+        
+        if not np.any(boundary):
+            return (0, 0)
+        
+        # Get bounding box of the FRAME (boundary cells)
+        rows, cols = np.where(boundary)
+        
+        if len(rows) == 0:
+            return (0, 0)
+        
+        frame_h = int(np.max(rows) - np.min(rows) + 1)
+        frame_w = int(np.max(cols) - np.min(cols) + 1)
+        
+        return (frame_h, frame_w)
+    
+    # =========================================================================
     # SPECTRAL REGION SEPARATION (Fiedler vector, no adjacency growth)
     # =========================================================================
     
@@ -386,6 +463,104 @@ class FieldInvariants:
         
         return regions
     
+    @staticmethod
+    def get_enclosed_regions_by_frame(phi: PhiField, threshold: float = 0.5) -> List[Dict]:
+        """
+        Get enclosed regions grouped by their ENCLOSING FRAME.
+        
+        For each enclosed pixel, identify the closest enclosing frame.
+        Group pixels by frame identity.
+        
+        This is more robust than spectral separation for nested/complex shapes.
+        """
+        enclosed = FieldInvariants.enclosed_mask(phi, threshold)
+        
+        if not np.any(enclosed):
+            return []
+        
+        h, w = phi.shape
+        
+        # For each enclosed pixel, find its enclosing frame's bounding box
+        # by finding the nearest non-zero cells in all 4 directions
+        pixel_to_frame = {}
+        
+        enclosed_positions = list(zip(*np.where(enclosed)))
+        
+        for (i, j) in enclosed_positions:
+            # Find frame boundaries in 4 directions
+            top = bottom = left = right = None
+            
+            # Up
+            for di in range(1, h):
+                if i - di < 0:
+                    break
+                if phi.q[i - di, j] != 0:
+                    top = i - di
+                    break
+            
+            # Down
+            for di in range(1, h):
+                if i + di >= h:
+                    break
+                if phi.q[i + di, j] != 0:
+                    bottom = i + di
+                    break
+            
+            # Left
+            for dj in range(1, w):
+                if j - dj < 0:
+                    break
+                if phi.q[i, j - dj] != 0:
+                    left = j - dj
+                    break
+            
+            # Right
+            for dj in range(1, w):
+                if j + dj >= w:
+                    break
+                if phi.q[i, j + dj] != 0:
+                    right = j + dj
+                    break
+            
+            if all(x is not None for x in [top, bottom, left, right]):
+                frame_key = (top, bottom, left, right)
+                pixel_to_frame[(i, j)] = frame_key
+        
+        # Group by frame
+        frame_to_pixels: Dict[Tuple, List] = {}
+        for pos, frame_key in pixel_to_frame.items():
+            if frame_key not in frame_to_pixels:
+                frame_to_pixels[frame_key] = []
+            frame_to_pixels[frame_key].append(pos)
+        
+        # Build region dictionaries
+        regions = []
+        for frame_key, positions in frame_to_pixels.items():
+            if not positions:
+                continue
+            
+            mask = np.zeros((h, w), dtype=bool)
+            for p in positions:
+                mask[p[0], p[1]] = True
+            
+            top, bottom, left, right = frame_key
+            frame_sz = (bottom - top + 1, right - left + 1)
+            
+            rows = [p[0] for p in positions]
+            cols = [p[1] for p in positions]
+            
+            regions.append({
+                'mask': mask,
+                'positions': positions,
+                'bbox': (min(rows), max(rows), min(cols), max(cols)),
+                'size': (max(rows) - min(rows) + 1, max(cols) - min(cols) + 1),
+                'area': len(positions),
+                'frame_bbox': frame_key,
+                'frame_size': frame_sz
+            })
+        
+        return regions
+
     @staticmethod
     def get_enclosed_regions(phi: PhiField, threshold: float = 0.5) -> List[Dict]:
         """
@@ -620,6 +795,7 @@ class TransformationRule:
     size_ratio: Tuple[float, float] = (1.0, 1.0)
     fill_color: int = 0
     size_to_color: Dict[Tuple[int, int], int] = field(default_factory=dict)
+    frame_to_fill: Dict[int, int] = field(default_factory=dict)  # NEW: frame-color invariant
     color_map: Dict[int, int] = field(default_factory=dict)
     tile_pattern: List[List[int]] = field(default_factory=list)
     detected_period: int = 0
@@ -670,19 +846,30 @@ class TransformationRule:
         return rule
     
     def _learn_from_pair(self, phi_in: PhiField, phi_out: PhiField, sigma: SigmaResidue):
-        # Fill colors for enclosed regions
+        # Fill colors for enclosed regions - use FRAME invariants
         if sigma.change_type == "fill" and sigma.structural_condition == "enclosed":
             regions = FieldInvariants.get_enclosed_regions(phi_in)
             for region in regions:
                 mask = region['mask']
-                size = region['size']
+                
+                # Get FRAME size (outer boundary), not interior size
+                frame_sz = FieldInvariants.frame_size(phi_in, mask)
+                interior_size = region['size']
+                
+                # Get fill color from output
                 fill_vals = phi_out.q[mask]
                 if len(fill_vals) > 0:
                     unique, counts = np.unique(fill_vals, return_counts=True)
                     fill_c = unique[np.argmax(counts)]
                     if fill_c != 0:
-                        self.size_to_color[size] = int(fill_c)
+                        # Learn frame_size → fill (PRIMARY)
+                        self.size_to_color[frame_sz] = int(fill_c)
                         self.fill_color = int(fill_c)
+                        
+                        # Learn frame_to_fill (SECONDARY)
+                        frame_c = FieldInvariants.frame_color(phi_in, mask)
+                        if frame_c != 0:
+                            self.frame_to_fill[frame_c] = int(fill_c)
         
         # Color mapping
         if phi_in.shape == phi_out.shape:
@@ -851,9 +1038,48 @@ class TransformationRule:
     
     def _apply_multi_region_fill(self, phi_in: PhiField) -> PhiField:
         result = phi_in.q.copy()
-        for region in FieldInvariants.get_enclosed_regions(phi_in):
-            fill_c = self.size_to_color.get(region['size'], self.fill_color)
-            result[region['mask']] = fill_c
+        
+        # Use frame-based region grouping (more robust for nested frames)
+        regions = FieldInvariants.get_enclosed_regions_by_frame(phi_in)
+        
+        for region in regions:
+            mask = region['mask']
+            
+            # Use pre-computed frame_size from frame-based grouping
+            frame_sz = region.get('frame_size')
+            
+            if frame_sz is None:
+                frame_sz = FieldInvariants.frame_size(phi_in, mask)
+            
+            fill_c = self.size_to_color.get(frame_sz)
+            
+            # GENERALIZATION: If exact size not found, use closest known size
+            if fill_c is None and len(self.size_to_color) > 0:
+                frame_area = frame_sz[0] * frame_sz[1]
+                
+                best_size = None
+                best_diff = float('inf')
+                
+                for known_size in self.size_to_color.keys():
+                    known_area = known_size[0] * known_size[1]
+                    diff = abs(frame_area - known_area)
+                    if diff < best_diff:
+                        best_diff = diff
+                        best_size = known_size
+                
+                if best_size is not None:
+                    fill_c = self.size_to_color[best_size]
+            
+            # FALLBACK: frame-color
+            if fill_c is None:
+                frame_c = FieldInvariants.frame_color(phi_in, mask)
+                fill_c = self.frame_to_fill.get(frame_c)
+            
+            # FALLBACK: default
+            if fill_c is None:
+                fill_c = self.fill_color
+            
+            result[mask] = fill_c
         return PhiField(result)
     
     def _apply_periodic_extension(self, phi_in: PhiField) -> PhiField:
@@ -906,6 +1132,7 @@ class ITTSolverV4:
         print(f"    Period (Fourier): {self.rule.detected_period}")
         print(f"    Shape→color: {len(self.rule.shape_to_color)} mappings")
         print(f"    Size→color: {len(self.rule.size_to_color)} mappings")
+        print(f"    Frame→fill: {dict(self.rule.frame_to_fill)}")  # NEW
     
     def solve(self, test_input: List[List[int]]) -> List[List[int]]:
         if self.rule is None:
