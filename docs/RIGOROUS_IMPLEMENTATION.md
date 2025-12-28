@@ -1,120 +1,165 @@
-# ITT PURE SOLVER v3: TRUE FOUNDATION
+# ITT PURE SOLVER: Version Evolution
 
-## Achievement: 6/6 with NO SMUGGLING
+## The Audit Trail
 
-The v3 solver addresses all smuggling identified in audit:
+### v1: "ITT-flavored" (6/6)
+**Problem**: Used ITT vocabulary but imported algorithms wholesale.
 
-| v2 (Still Smuggled) | v3 (True Foundation) |
-|---------------------|----------------------|
-| BFS on Laplacian sign = connected components | Distance field segmentation |
-| "Can reach boundary" = flood fill | Harmonic connectivity ∇²u = 0 |
-| Sign-change count = noisy | ρ_q = \|∇(∇²Φ)\| (stable) |
-| Integer colors = discretization artifacts | Φ̃/Φ_q dual representation |
+| Smuggled | How |
+|----------|-----|
+| Objects | `scipy.ndimage.label()` |
+| Enclosure | `flood_fill()` BFS |
+| Shape | `tuple(relative_positions)` |
+| Period | `for p in divisors...` |
 
-## Layer Architecture
+### v2: "Rigorous" (6/6)
+**Improvement**: Eigenspectrum shapes, Fourier periods.
+**Still Smuggled**: BFS enclosure, stack-based region growing.
 
-### Layer 0 — Primitives (given)
-- **Φ**: scalar potential field
-- **∇Φ**: ordering gradient  
-- **σ**: irreducible residue
-- **ρ_q**: boundary charge
+| Fixed | Still Smuggled |
+|-------|---------------|
+| Shape → eigenspectrum | Enclosure → BFS |
+| Period → Fourier | Objects → connected components |
 
-### Layer 1 — Operators (derived)
-- **∇²Φ**: Laplacian (computed on smoothed Φ̃)
-- **Harmonic solve**: ∇²u = 0 with Dirichlet BCs
-- **Eigenspectrum**: restricted Laplacian eigenvalues
-- **Fourier**: frequency decomposition
+### v3: "True Foundation" (6/6)
+**Improvement**: Harmonic enclosure via Dirichlet solve.
+**Still Smuggled**: 
+- `get_enclosed_regions` uses adjacency growth
+- `_grow_region_from_center` uses stack + neighbor push
+- `Φ_q` inferred via `np.round()`, not explicit
+- `ρ_q` threshold arbitrary percentile
 
-### Layer 2 — Invariants (measured via Layer 1)
-- **Enclosure**: u < 0.5 where u solves ∇²u = 0
-- **Shape**: eigenspectrum (λ₂, λ₃, ...)
-- **Period**: GCD of significant Fourier modes
-- **Energy**: Σ\|∇Φ\|²
+### v4: "Absolute Foundation" (5/6)
+**All smuggling addressed**:
 
-### Layer 3 — Procedures (numerical)
-- Gauss-Seidel relaxation
-- Distance transform
-- Linear algebra
+| Issue | v4 Fix |
+|-------|--------|
+| Adjacency growth | Spectral separation (Fiedler) |
+| `Φ_q` inferred | Explicit `_q: int`, `_tilde: float` |
+| Arbitrary threshold | Physics-derived `μ + 1.5σ` |
+| Region splitting | Laplacian eigendecomposition |
 
-## Key Derivations
-
-### Enclosure via Harmonic Connectivity
-
-```
-Solve on ground domain Z = {Φ = 0}:
-    ∇²u = 0   on interior
-    u = 1     on grid boundary ∩ Z
-    Obstacles act as barriers (not in domain)
-
-Result:
-    u ≈ 1 → connected to boundary (exterior)
-    u ≈ 0 → enclosed pocket (interior)
-```
-
-This is a **Dirichlet Laplace problem**, not flood fill.
-
-### Stabilized Boundary Charge
-
-```
-ρ_q := |∇(∇²Φ)|
-```
-
-Where curvature changes sharply — true termination surfaces.
-NOT sign-change counting (too noisy on discrete grids).
-
-### Dual Field Representation
-
-```
-Φ_q ∈ {0..9}    (quantized, ARC colors)
-Φ̃ = G_σ * Φ_q  (smoothed, for stable operators)
-
-Rule: Compute invariants on Φ̃, output Φ_q
-```
-
-## What's Still Not Fully Pure
-
-Per ChatGPT's audit, these remain as "numerical approximations":
-
-1. **Region splitting** after harmonic solve uses proximity clustering
-   - Could be replaced with spectral clustering
-   
-2. **Object extraction** uses distance field
-   - Could use ρ_q contour closure
-   
-3. **Rule taxonomy** is still categorical
-   - Could be energy minimization over transformation space
-
-These are acknowledged as Layer 3 procedures, not smuggled concepts.
-
-## Results
-
-```
-============================================================
-Solved: 6/6 (100%)
-  00576224: ✓  [tile]
-  007bbfb7: ✓  [self_tile]
-  009d5c81: ✓  [shape_indicator - eigenspectrum]
-  00d62c1b: ✓  [fill_enclosed - harmonic]
-  00dbd492: ✓  [multi_region_fill - harmonic]
-  017c7c7b: ✓  [periodic_extension - Fourier]
-============================================================
-```
-
-## The Foundation Checklist
-
-✅ **Φ representation**: Φ̃/Φ_q dual
-✅ **ρ_q definition**: |∇(∇²Φ)| 
-✅ **Enclosure definition**: Harmonic reachability u < τ
-⚠️ **Object definition**: Distance field (could be ρ_q contours)
-
-## Next Steps for Full Purity
-
-1. **Object extraction via ρ_q contours** (not distance field)
-2. **Rule selection via energy minimization** (not taxonomy)
-3. **Region splitting via spectral clustering** (not proximity)
+**Regression**: 1 task (00dbd492) - requires frame-color→fill-color rule, not just size→color.
 
 ---
 
-**The blade is now cleaner, but the joints can still be purified further.**
+## The Four-Layer Doctrine (Locked)
+
+```
+Layer 0 — Primitives (given)
+    Φ (scalar potential)
+    ∇Φ (ordering gradient)
+    σ (irreducible residue)
+    ρ_q (boundary charge)
+
+Layer 1 — Operators (derived)
+    ∇²Φ (Laplacian)
+    ∇²u = 0 (harmonic solve)
+    eigh(L) (spectral decomposition)
+    FFT (Fourier)
+
+Layer 2 — Invariants (measured via Layer 1)
+    Enclosure: u < τ from harmonic field
+    Shape: (λ₂, λ₃, ...) from restricted Laplacian
+    Period: GCD of significant Fourier modes
+    Energy: Σ||∇Φ||²
+
+Layer 3 — Procedures (numerical, declared)
+    Gauss-Seidel relaxation
+    Eigenvector computation
+    (NOT concepts — just approximations)
+```
+
+---
+
+## Critical Fixes in v4
+
+### 1. Explicit Dual Field
+
+```python
+@dataclass
+class PhiField:
+    _q: np.ndarray      # Φ_q: int (semantic truth)
+    _tilde: np.ndarray  # Φ̃: float (operator stability)
+```
+
+No more `np.round(phi.data)` scattered everywhere.
+
+### 2. Spectral Region Separation
+
+```python
+def separate_regions_spectral(mask):
+    # Build restricted Laplacian L
+    L[idx, idx] = degree
+    L[idx, neighbor_idx] = -1
+    
+    # Eigendecomposition
+    eigenvalues, eigenvectors = np.linalg.eigh(L)
+    
+    # Count zero eigenvalues = number of components
+    num_components = sum(|λ| < ε)
+    
+    # Assign by eigenvector sign patterns
+    labels = sum(sign(v_i) * 2^(i-1))
+```
+
+This is **linear algebra**, not graph traversal.
+
+### 3. Physics-Derived Threshold
+
+```python
+def boundary_mask(self):
+    rho = self.boundary_charge()
+    nonzero = rho[rho > 0]
+    threshold = mean(nonzero) + 1.5 * std(nonzero)
+    return rho >= threshold
+```
+
+Outlier detection on distribution, not arbitrary percentile.
+
+---
+
+## Remaining Limitations
+
+### Task 00dbd492 Failure
+
+The multi-region fill requires learning **frame_color → fill_color**, not just **size → fill_color**.
+
+This needs a richer invariant: "what color encloses this region?"
+
+**Foundation-aligned fix**: Compute ρ_q on region boundary, identify dominant boundary color.
+
+### Rule Taxonomy
+
+Still uses categorical rule types (`tile`, `fill_enclosed`, etc.).
+
+**Pure approach**: Energy minimization over transformation space. Winner = lowest σ under legal transforms.
+
+---
+
+## Comparison Table
+
+| Metric | v1 | v2 | v3 | v4 |
+|--------|----|----|----|----|
+| Tasks Solved | 6/6 | 6/6 | 6/6 | 5/6 |
+| Φ_q Explicit | ❌ | ❌ | ❌ | ✅ |
+| ρ_q Stable | ❌ | ❌ | ✅ | ✅ |
+| Harmonic Enclosure | ❌ | ❌ | ✅ | ✅ |
+| Spectral Separation | ❌ | ❌ | ❌ | ✅ |
+| No Graph Walks | ❌ | ❌ | ❌ | ✅ |
+| Physics Threshold | ❌ | ❌ | ❌ | ✅ |
+
+**v4 trades 1 task for true foundation purity.**
+
+---
+
+## Next Steps
+
+1. **Frame-color invariant**: Identify boundary color of enclosed region
+2. **Energy-based rule selection**: Minimize σ, not match taxonomy
+3. **Level-set objects via ρ_q contours**: Replace distance field
+4. **Test on full 800 tasks**: Find systematic gaps
+
+---
 
 HAIL MATH.
