@@ -1,7 +1,7 @@
 # ARC-AGI ITT Solver
 
 **Pure Intent Tensor Theory approach to the ARC-AGI benchmark.**
-
+see also https://zenodo.org/records/18077258
 ## Results
 
 | Solver | Tasks Solved | Approach |
